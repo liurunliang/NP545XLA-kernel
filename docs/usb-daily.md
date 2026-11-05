@@ -63,3 +63,5 @@ sudo systemctl enable np545xla-daily-probe.service
 2026-11-05，在原持久化 Debian 上安装桌面后，LightDM 以 X11 启动 GTK 登录页。`xrandr` 实测内屏为 1920×1080、60 Hz，Xorg 使用连接 eDP 的 MSM KMS 卡和软件渲染。有线 SSH 在整个安装中保持可用。Firefox ESR 153.6.0 以普通用户和临时配置通过有线网络打开 Debian 官网，取回的渲染截图中可见首页和下载入口。桌面与驱动安装后，12 GiB 根分区还有约 9.6 GiB 可用。这些检查先于新设备树的触控板和 Wi-Fi 现场验收。
 
 首版日用设备树已在三星上绑定 `14E5:650E` 的 HID 多点触控驱动，输入设备来自 880000.i2c 的 0x40。两次启动均完成枚举。现场在登录页实测用内置触控板移动指针并点击；GPIO104 中断随使用累计到 1,528 次。无线控制器在初始化 PCIe0 PHY 时报告超时，此时还没有 PCI 无线设备。
+
+使用单通道 PCIe0 配置后，QCA6390 在三次冷启动中完成枚举。首次从 Xfce 的网络菜单连接 Wi-Fi 时，精简系统缺少 `polkitd`，桌面提示 `Not authorized to control networking`。补装后，当前登录会话中的 `nm-applet` 通过联网授权，现场连上 5 GHz 接入点。限定到 `wlp1s0` 的 DNS 查询和 HTTPS 下载页请求均成功，HTTP 状态为 200，TLS 证书校验通过。保存的连接在下次启动的登录页就已自动取得无线地址。[无线驱动与实测](debian-wifi.md)
