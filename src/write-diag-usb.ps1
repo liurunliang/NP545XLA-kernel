@@ -1,9 +1,10 @@
 #requires -Version 5.1
 # Inspect identifies the existing labelled volume. Preflight also hashes the
-# source and opens the disk read-only. Only Write erases media.
+# source and opens the disk read-only. Write clears labelled media.
+# ResumeCleared accepts only the same previously identified, empty USB disk.
 [CmdletBinding()]
 param(
-    [ValidateSet('Inspect', 'Preflight', 'Write', 'Verify')]
+    [ValidateSet('Inspect', 'Preflight', 'Write', 'ResumeCleared', 'Verify')]
     [string]$Mode = 'Inspect',
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ExpectedLabel,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ExpectedModel,
@@ -50,6 +51,13 @@ function Get-TargetDisk {
         }
     }
     return $disk
+}
+
+function Assert-ClearedDisk($d) {
+    # Removable drives can retain an initialized MBR or GPT after Clear-Disk.
+    if ($d.PartitionStyle -notin @('RAW','MBR','GPT') -or $d.NumberOfPartitions -ne 0) {
+        throw "Expected an empty USB disk (style=$($d.PartitionStyle), partitions=$($d.NumberOfPartitions))."
+    }
 }
 
 if ($Mode -eq 'Inspect') {
@@ -136,7 +144,9 @@ public static class Np545xlaDiskIO {
 '@
 }
 
-$disk = Get-TargetDisk -Labelled:($Mode -ne 'Verify')
+if ($Mode -eq 'ResumeCleared' -and !$ExpectedUniqueId) { throw 'Resume requires the hardware unique ID recorded by Inspect.' }
+$disk = Get-TargetDisk -Labelled:($Mode -in @('Preflight', 'Write'))
+if ($Mode -eq 'ResumeCleared') { Assert-ClearedDisk $disk }
 $file = Get-Item -LiteralPath $ImagePath
 if (!($file -is [IO.FileInfo])) { throw 'Expected a regular local image file.' }
 $sourceDisk = @(Get-Volume -FilePath $file.FullName | Get-Partition | Get-Disk)
@@ -165,12 +175,16 @@ try {
         if ($disk.IsReadOnly) { throw 'The target is read-only.' }
         Write-Host "Clearing $ExpectedLabel on $($disk.Path), then writing $length bytes."
         Clear-Disk -InputObject $disk -RemoveData -Confirm:$false
-        $disk = Get-TargetDisk
-        if ($disk.PartitionStyle -ne 'RAW' -or $disk.NumberOfPartitions -ne 0) { throw 'Expected a cleared RAW USB disk.' }
-        [void][Np545xlaDiskIO]::Transfer($disk.Path, $length, $sector, $source)
-        Update-Disk -InputObject $disk
     }
-    $disk = Get-TargetDisk
+    if ($Mode -in @('Write','ResumeCleared')) {
+        $disk = Get-TargetDisk
+        Assert-ClearedDisk $disk
+        if ($disk.IsReadOnly) { throw 'The target is read-only.' }
+        [void][Np545xlaDiskIO]::Transfer($disk.Path, $length, $sector, $source)
+        # Raw verification must precede any partition rescan. On a larger USB,
+        # Windows rewrites GPT BackupLBA/LastUsableLBA and HeaderCRC32 on rescan.
+    }
+    # Open the same hardware path again, uncached, without asking Windows to refresh its GPT.
     $readback = [Np545xlaDiskIO]::Transfer($disk.Path, $length, $sector, $null)
     if ($readback -ne $Sha256) { throw "Readback SHA256 mismatch: $readback" }
     [pscustomobject]@{Result='Verified'; Target=$disk.Path; ImageBytes=$length; SourceSHA256=$hash; ReadbackSHA256=$readback}
