@@ -12,10 +12,10 @@
 
 ## 在笔记本上使用
 
-通过固件一次性启动菜单选择 U 盘，让 GRUB 倒计时进入 Debian。接上 RTL8153 和网线，内屏会显示 DHCP 分配的地址及 SSH 主机指纹。从持有构建公钥所对应私钥的 Mac 登录，把下面的占位符换成内屏显示的地址。
+通过固件一次性启动菜单选择 U 盘，让 GRUB 倒计时进入 Debian。接上 RTL8153 和网线，在同一局域网的 Mac 上可以用固定名称登录，即使 DHCP 地址变化也适用。内屏同时显示当次 IP 和 SSH 主机指纹；网络屏蔽 mDNS 时可用该 IP 登录。
 
 ```sh
-ssh -p 2223 liurunliang@<屏上地址>
+ssh -p 2223 liurunliang@np545xla-debian.local
 ```
 
 首次连接时核对内屏指纹。这个账户可以使用 `sudo`。SSH 只接受公钥，主机密钥保存在 U 盘，日常关机使用 `sudo systemctl poweroff`。若需要本机控制台登录，可以先通过 SSH 执行 `sudo passwd liurunliang` 为账户设置密码。

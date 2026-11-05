@@ -137,7 +137,10 @@ printf 'UUID=%s / ext4 defaults,errors=remount-ro 0 1\n' "$uuid" > "$root/etc/fs
 install -d "$root/etc/systemd/system-generators"
 ln -sfn /dev/null "$root/etc/systemd/system-generators/systemd-gpt-auto-generator"
 
-install -d "$root/etc/systemd/network" "$root/etc/modprobe.d" "$root/etc/systemd/journald.conf.d"
+install -d "$root/etc/systemd/network" "$root/etc/systemd/resolved.conf.d" "$root/etc/modprobe.d" "$root/etc/systemd/journald.conf.d"
+# Debian disables mDNS globally by default. The wired link below serves the
+# persistent .local hostname even when DHCP assigns a different address.
+printf '[Resolve]\nMulticastDNS=yes\n' > "$root/etc/systemd/resolved.conf.d/90-np545xla-mdns.conf"
 cat > "$root/etc/systemd/network/20-np545xla-wired.network" <<'NETWORK'
 [Match]
 Driver=r8152 cdc_ether virtio_net
@@ -148,6 +151,7 @@ RequiredForOnline=no
 [Network]
 DHCP=ipv4
 IPv6AcceptRA=yes
+MulticastDNS=yes
 
 [DHCPv4]
 ClientIdentifier=mac
