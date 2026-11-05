@@ -50,7 +50,7 @@ After=np545xla-display.service
 ExecStartPre=/usr/local/libexec/np545xla-prepare-xorg
 UNIT
 cat > /etc/X11/Xsession.d/80np545xla-render <<'SESSION'
-if [ -f /run/np545xla-desktop/software-render ]; then
+if [ "${XDG_SESSION_TYPE:-x11}" = x11 ] && [ -f /run/np545xla-desktop/software-render ]; then
     export LIBGL_ALWAYS_SOFTWARE=1
 fi
 SESSION
@@ -60,7 +60,7 @@ if systemctl is-active --quiet NetworkManager.service; then nmcli general reload
 export DEBIAN_FRONTEND=noninteractive
 apt-get update --error-on=any
 apt-get install -y --no-install-recommends \
-    xfce4 xfce4-terminal lightdm lightdm-gtk-greeter xserver-xorg-core \
+    xfce4 xfce4-terminal labwc lightdm lightdm-gtk-greeter xserver-xorg-core \
     xserver-xorg-input-libinput libinput-tools xinput x11-xserver-utils x11-utils mesa-utils \
     libgl1-mesa-dri firefox-esr fonts-noto-cjk network-manager network-manager-gnome \
     wpasupplicant polkitd dbus-user-session libpam-systemd \

@@ -33,6 +33,12 @@
 
 在同次启动中，独立的 Cage/Wayland 合成器打开了该渲染节点。原生 Wayland 客户端再次报告 `FD680`，三个窗口缓冲区均通过像素校验并收到帧回调，输出为虚拟屏。在原日用 X11 服务器上，指定 GPU 后客户端仍报告 `llvmpipe`，硬件测试按预期判为失败。上述原始记录在 `output/adreno/` 的 `first-open.txt`、`node-hardware.txt`、`wayland-headless-hardware.txt` 和 `x11-split-hardware.txt`。
 
+## 在 LightDM 选择 Xfce 会话
+
+在本机登录页顶部的会话菜单选择 **Xfce Session**（X11）或 **Xfce Session (Wayland)**，再输入本机密码。安装脚本保留 `xfce` 作为默认项。进入桌面后，在终端执行 `echo "$XDG_SESSION_TYPE"` 可核对当前协议。
+
+三星上的 Debian 13 提供 Xfce 4.20.2。两个会话入口分别执行 `startxfce4` 和 `startxfce4 --wayland`；后者默认用 labwc 启动 `xfce4-session`。`debian-desktop/provision` 安装 labwc，同时把 Xsession 的软件渲染设置限定在 X11 会话。本机既有安装补入了 `labwc` 和 `libsfdo0` 两个包，下载 280 kB、增占 1052 kB，LightDM 仍在同一进程中运行。实机登录器的会话列表已核对，物理 Wayland 会话下的呈现与输入需另外验收。[Debian labwc 软件包](https://packages.debian.org/trixie/labwc) · [Xfce 会话启动脚本](https://sources.debian.org/src/xfce4-session/4.20.2-2/scripts/startxfce4.in/)
+
 ## 输入路径
 
 内置键盘和触控板先经过内核输入驱动、udev 和 libinput。板级键盘包在 `inputN` 父节点和事件节点去除错误的绘图板标签，保留键盘标签。这个修正位于显示协议之下。Xorg 已注册内置键盘，现场也已在登录页用内置触控板移动及点击。使用 libinput 的原生 Wayland 合成器可以读取这些分类，物理设备在该合成器下的键入、移动及点击需要在真实 Wayland 座席单独实测。[板级键盘分类规则](../src/debian-rootfs/70-np545xla-eckb.rules) · [内置输入验收](usb-daily.md)
