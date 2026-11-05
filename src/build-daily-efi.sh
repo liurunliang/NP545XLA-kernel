@@ -3,11 +3,12 @@
 set -euo pipefail
 export LC_ALL=C
 overlay=
-if [[ ${1:-} == --adreno-overlay ]]; then
+overlay_mode=${1:-}
+if [[ $# == 4 && ( $overlay_mode == --adreno-overlay || $overlay_mode == --default-adreno-overlay ) ]]; then
     overlay=$(sha256sum "$2" | cut -d' ' -f1)
     shift 2
 fi
-[[ $# == 2 ]] || { echo "Usage: $0 debian-image-manifest.txt BOOTAA64.EFI" >&2; exit 2; }
+[[ $# == 2 ]] || { echo "Usage: $0 [--adreno-overlay FILE | --default-adreno-overlay FILE] debian-image-manifest.txt BOOTAA64.EFI" >&2; exit 2; }
 src=$(cd "$(dirname "$0")" && pwd)
 bundle=$(awk '$1 == "Bundle:" {print $2}' "$1")
 [[ $bundle =~ ^[0-9a-f]{16}$ ]] || { echo 'Invalid Debian image manifest' >&2; exit 1; }
@@ -45,6 +46,9 @@ if [ "$default" = debian ]; then set default=daily; fi
 GRUB
     if [[ -n $overlay ]]; then
         sed "s/@OVERLAY_SHA256@/$overlay/g" "$src/adreno-grub.cfg"
+        if [[ $overlay_mode == --default-adreno-overlay ]]; then
+            echo 'if [ "$default" = daily ]; then set default=adreno-unified; fi'
+        fi
     fi
 } | sed "s/@BUNDLE@/$bundle/g" > "$stage/grub.cfg"
 grub-script-check "$stage/grub.cfg"

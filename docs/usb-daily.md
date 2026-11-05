@@ -1,6 +1,6 @@
 # 在持久化 Debian U 盘上试验内置设备
 
-启动菜单的前三项仍是诊断系统，第四项使用已验收的原 Debian 设备树。第五项使用单独的日用设备树，实机默认选它。两个 Debian 入口共用同一份根文件系统、系统账户、内核和 initramfs，均关闭内置 UFS。更新日用设备树后，菜单末尾的 **previous daily device tree** 可启动前一版日用配置。第四项始终提供原 Debian 设备树。
+启动菜单的前三项是诊断系统，第四项使用已验收的原 Debian 设备树。第五项 **Debian 13 - daily desktop (Samsung)** 使用单独的日用设备树，可手动选择以回退。当前 SanDisk 的默认项是 **Debian 13 - Adreno unified DRM trial (Samsung)**。这些 Debian 入口共用 USB 根文件系统和系统账户，均关闭内置 UFS。更新日用设备树后，菜单中的 **previous daily device tree** 可启动前一版日用配置。
 
 ## 生成设备树与菜单
 
@@ -57,11 +57,13 @@ sudo bash install-adreno-firmware.sh debian-firmware qcdxkmsuc8180.mbn
 sudo bash install-daily-boot.sh --adreno unified-trial-v2 manifest.txt daily.dtb
 ```
 
-手动选择 **Debian 13 - Adreno unified DRM trial (Samsung)**。启动后读取 `/sys/module/msm/parameters/separate_gpu_kms`，该入口应返回 `N`。检查 `/sys/class/drm/` 中连接 eDP 的卡在同一设备下拥有渲染节点，再检查会话的渲染器与实际出帧。传统日用入口会传入 `separate_gpu_kms=1`，它仍是三星的默认项。若试验画面异常，重新开机并等待默认倒计时即可回到该入口。安装脚本首次安装时将这之前的日用启动器保存在同一 USB EFI 分区的 `/EFI/BOOT/BOOTAA64.EFI.pre-adreno`。
+使用修复版 MSM 模块构建菜单后，GRUB 在三星上倒计时 5 秒，自动选择 **Debian 13 - Adreno unified DRM trial (Samsung)**。启动后可用 `sudo cat /sys/module/msm/parameters/separate_gpu_kms` 核对结果为 `N`。要回退，在 GRUB 倒计时期间用方向键选择 **Debian 13 - daily desktop (Samsung)** 并按回车。该入口使用 `separate_gpu_kms=1`。若只构建基础日用菜单，或打包未带修复模块的早期试验版本，默认项仍为原日用入口。首次安装 Adreno 菜单前的启动器保存在同一 USB EFI 分区的 `/EFI/BOOT/BOOTAA64.EFI.pre-adreno`。
+
+2026-11-05 在 SanDisk 上更新默认项后，重新只读挂载 EFI 分区并核对全部 13 个文件，唯一变化是 `EFI/BOOT/BOOTAA64.EFI`，SHA-256 为 `5b426aac339ed2e6bf36b338e9734e7067f11ec41a2d514a5b39f5bdc728faad`。同一 EFI 在模拟三星产品名的 QEMU 中，经无人操作倒计时进入 `adreno-unified`，手选回退进入 `daily`。这两次检查覆盖 GRUB 的菜单选择。两个入口在三星上的启动验收早于本次菜单调整。
 
 首次使用原始 Linux 7.0 模块启动统一 DRM 后，三星在约 49 秒出现 GMU 调频请求超时，随后两次触发 watchdog 和 Xorg 提交队列恢复。Surface Pro X 上的同款 A680 已复现这一顺序。上游作者定位到内核重构遗漏了 A680 的四个 GBIF 服务质量寄存器。第二版补充包回移这项修复，并将 A680 的片上 GMEM 基址及用户态查询值同步设为零。后者针对同一 GPU 在 Vulkan 中出现的纹理损坏。[上游 GBIF 修复](https://lore.kernel.org/dri-devel/20261103011358.65398-2-val@packett.cool/) · [上游 GMEM 修复与实测](https://lore.kernel.org/dri-devel/20261103011358.65398-3-val@packett.cool/)
 
-第二版在补充包中覆盖 `lib/modules/7.0.0/kernel/drivers/gpu/drm/msm/msm.ko`。它对照原始模块检查 vermagic、依赖、别名与导入符号。实机启动后可执行 `sudo od -An -tx1 -j16 -N20 /sys/module/msm/notes/.note.gnu.build-id`，将 20 字节与本次构建输出 `msm-v2/build-id.txt` 比较。默认日用入口加载原始模块。QEMU 已通过 USB 冷启动验证第二版叠加包的校验、根盘 SSH 登录及原 Debian 入口的回退。三星实机已核对运行模块的构建 ID，并用 FD680 完成 100 秒 X11 连续绘图，期间新增 GPU 故障为零。[内屏与图形协议实测](debian-graphics.md)
+第二版在补充包中覆盖 `lib/modules/7.0.0/kernel/drivers/gpu/drm/msm/msm.ko`。它对照原始模块检查 vermagic、依赖、别名与导入符号。实机启动后可执行 `sudo od -An -tx1 -j16 -N20 /sys/module/msm/notes/.note.gnu.build-id`，将 20 字节与本次构建输出 `msm-v2/build-id.txt` 比较。原日用回退入口加载原始模块。QEMU 已通过 USB 冷启动验证第二版叠加包的校验、根盘 SSH 登录及原 Debian 入口的回退。三星实机已核对运行模块的构建 ID，并用 FD680 完成 100 秒 X11 连续绘图，期间新增 GPU 故障为零。[内屏与图形协议实测](debian-graphics.md)
 
 三星 DSDT 按 `SOID=0x194`、`SIDV=0x20001`、`SIDT=3` 为 Windows 选择 GPU 表 P003，活动频率为 156、235、315、392、530、595、625、670、718 MHz。Linux v7.0 原 DT 提供 177、256、315、405、461、500、514 MHz。第一版实机的 `simple_ondemand` 在 177、405 与 514 MHz 之间记录到 178 次转换。第二版沿用这个策略与频率表，以便检验驱动修复。两套表共同列出的 315 MHz 可在后续诊断中用作固定频率对照。[三星 DSDT](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L85690) · [Linux v7.0 设备树](https://github.com/torvalds/linux/blob/v7.0/arch/arm64/boot/dts/qcom/sc8180x.dtsi#L2286)
 

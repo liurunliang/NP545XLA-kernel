@@ -33,6 +33,7 @@ HASHES
 (cd "$fw"; sha256sum -c "$stage/firmware.sha256")
 install -m 0644 "$stage/firmware.sha256" "$fw/SHA256SUMS"
 install -m 0755 "$src/debian-init" "$work/debian-init-adreno"
+menu_mode=--adreno-overlay
 if [[ -n $module_dir ]]; then
     # This exact uncompressed member is listed in the base initramfs modules.dep.
     # Overlay it at its original path so BusyBox uses the existing dependency index.
@@ -43,6 +44,7 @@ if [[ -n $module_dir ]]; then
     install -D -m 0644 "$module_dir/msm.ko" "$work/$module"
     mkdir -p "$work/etc"
     (cd "$work"; sha256sum "$module" > etc/np545-adreno-module.sha256)
+    menu_mode=--default-adreno-overlay
 fi
 (
     cd "$work"
@@ -50,7 +52,7 @@ fi
     find . -mindepth 1 -exec touch -d @0 -- {} +
     find . -mindepth 1 -print0 | sort -z | cpio --null --quiet --reproducible -o -H newc --owner=0:0
 ) | gzip -n > "$stage/adreno.cpio.gz"
-bash "$src/build-daily-efi.sh" --adreno-overlay "$stage/adreno.cpio.gz" "$manifest" "$stage/BOOTAA64.EFI"
+bash "$src/build-daily-efi.sh" "$menu_mode" "$stage/adreno.cpio.gz" "$manifest" "$stage/BOOTAA64.EFI"
 (cd "$stage"; sha256sum BOOTAA64.EFI adreno.cpio.gz firmware.sha256 > SHA256SUMS)
 mv -nT "$stage" "$out"
 [[ ! -e $stage ]]

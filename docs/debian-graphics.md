@@ -2,7 +2,7 @@
 
 ## 在 U 盘上使用已验证的硬件加速
 
-在 GRUB 选 **Debian 13 - Adreno unified DRM trial (Samsung)**。到 LightDM 登录页，选 **Xfce Session** 进入 X11，或选 **Xfce Session (Wayland)** 进入 Wayland。两种会话均已在这台三星的 1920×1080 内屏实测，使用同一套 USB Debian 和用户文件。终端里执行 `echo "$XDG_SESSION_TYPE"` 可查看当前会话。想回到原来的软件渲染桌面时，让 GRUB 自动倒计时进入日用 Debian，在登录页选 **Xfce Session**。登录器可以记住上次选择。[试验入口构建与回退](usb-daily.md#adreno-统一-drm-试验入口)
+从 SanDisk 启动后，GRUB 倒计时 5 秒会自动进入 **Debian 13 - Adreno unified DRM trial (Samsung)**。到 LightDM 登录页，选 **Xfce Session** 进入 X11，或选 **Xfce Session (Wayland)** 进入 Wayland。两种会话均已在这台三星的 1920×1080 内屏实测，使用同一套 USB Debian 和用户文件。终端里执行 `echo "$XDG_SESSION_TYPE"` 可查看当前会话。要回到原来的软件渲染桌面，在 GRUB 倒计时期间用方向键选 **Debian 13 - daily desktop (Samsung)** 并按回车，再在登录页选 **Xfce Session**。登录器可以记住上次选择。[启动菜单构建与回退](usb-daily.md#adreno-统一-drm-试验入口)
 
 ### 2026-11-05 第二版驱动实机验收
 
