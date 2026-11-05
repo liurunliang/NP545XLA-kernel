@@ -1,0 +1,16 @@
+#!/bin/sh
+# BusyBox udhcpc calls this script with lease fields in the environment.
+set -e
+case $1 in
+    deconfig)
+        ip -4 addr flush dev "$interface"
+        ip link set "$interface" up
+        ;;
+    bound|renew)
+        ifconfig "$interface" "$ip" netmask "${subnet:-255.255.255.0}" up
+        for gateway in $router; do
+            ip route replace default via "$gateway" dev "$interface"
+            break
+        done
+        ;;
+esac

@@ -1,0 +1,41 @@
+#!/bin/sh
+# Generate a full snapshot on demand. A rename keeps SSH reads consistent.
+set -u
+out=/run/diagnostics
+{
+    cat "$out/status"
+    echo
+    echo '--- Kernel and firmware ---'
+    uname -a
+    cat /proc/cmdline
+    [ ! -r /sys/firmware/devicetree/base/compatible ] || tr '\000' '\n' < /sys/firmware/devicetree/base/compatible
+    ls /sys/firmware/acpi/tables 2>/dev/null
+    echo
+    echo '--- USB devices: topology, ID, product, driver ---'
+    for usb in /sys/bus/usb/devices/*; do
+        [ -r "$usb/idVendor" ] || continue
+        printf '%s %s:%s %s\n' "${usb##*/}" "$(cat "$usb/idVendor")" "$(cat "$usb/idProduct")" "$(cat "$usb/product" 2>/dev/null)"
+        for interface in "$usb":*; do
+            [ -L "$interface/driver" ] || continue
+            printf '  %s -> %s\n' "${interface##*/}" "$(readlink "$interface/driver")"
+        done
+    done
+    echo '--- Block devices: major, minor, size (KiB), name ---'
+    cat /proc/partitions
+    echo '--- Mounts ---'
+    cat /proc/mounts
+    echo '--- Input ---'
+    cat /proc/bus/input/devices 2>/dev/null
+    echo '--- Interfaces and routes ---'
+    ip addr
+    ip route
+    echo '--- Deferred probes ---'
+    cat /sys/kernel/debug/devices_deferred 2>/dev/null
+    echo '--- DHCP and SSH ---'
+    for logfile in "$out"/dhcp.log "$out"/ssh.log; do
+        [ ! -f "$logfile" ] || tail -50 "$logfile"
+    done
+    echo '--- Kernel messages ---'
+    dmesg
+} > "$out/report.$$" 2>&1
+mv "$out/report.$$" "$out/report.txt"

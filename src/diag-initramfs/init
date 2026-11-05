@@ -1,0 +1,233 @@
+#!/bin/sh
+# This is PID 1. All writable files live in the initramfs or tmpfs.
+export PATH=/bin
+umask 077
+mount -t devtmpfs devtmpfs /dev
+exec </dev/console >/dev/console 2>&1
+echo 'NP545XLA DIAG: /init started'
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+mount -t tmpfs -o mode=755 tmpfs /run
+mount -t debugfs -o nosuid,nodev,noexec debugfs /sys/kernel/debug
+hostname np545xla-diag
+ip link set lo up
+log=/run/diagnostics
+mkdir -p "$log"
+
+# ACPI boot on arm64 can expose a minimal EFI device tree. Look for an
+# active DSDT first and report DT mode only if a hardware compatible exists.
+firmware=unknown
+if [ -f /sys/firmware/acpi/tables/DSDT ]; then
+    firmware=ACPI
+elif [ -r /sys/firmware/devicetree/base/compatible ]; then
+    firmware=DT
+fi
+qemu=false
+if grep -iq '^QEMU' /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name 2>/dev/null; then
+    qemu=true
+fi
+boot_id=$(cat /proc/sys/kernel/random/boot_id)
+entry=$(tr ' ' '\n' </proc/cmdline | sed -n 's/^diag\.mode=//p' | tail -1)
+dmesg -n 3
+
+# Give each boot a fresh host identity. Entropy or daemon startup must never
+# block offline diagnostics. Publish the fingerprint only for the actual key.
+(
+    key=/run/diag-host-ed25519
+    dropbearkey -t ed25519 -f "$key" >/dev/null &&
+    dropbearkey -y -f "$key" | awk '/^Fingerprint: / { print $2 }' > "$log/fingerprint" &&
+    exec dropbear -F -E -s -j -k -p 2222 -r "$key" -P /run/diag-dropbear.pid
+) >> "$log/ssh.log" 2>&1 &
+
+is_rtl8153() {
+    [ -r "$1/idProduct" ] || return 1
+    [ "$(cat "$1/idProduct")" = 8153 ] || grep -qi '8153' "$1/product" 2>/dev/null
+}
+
+find_nic() {
+    for nic in /sys/class/net/*; do
+        driver=$(readlink "$nic/device/driver") || continue
+        case ${driver##*/} in
+            r8152|cdc_ether)
+                is_rtl8153 "$nic/device/.." || continue
+                ;;
+            virtio_net) "$qemu" || continue ;;
+            *) continue ;;
+        esac
+        echo "${nic##*/}"
+        return
+    done
+}
+
+display() {
+    if [ -c /dev/tty0 ]; then
+        { printf '\033[2J\033[H'; cat "$log/status"; } >/dev/tty0
+    fi
+    if "$qemu" && [ -c /dev/ttyAMA0 ]; then
+        cat "$log/status" >/dev/ttyAMA0
+    elif [ ! -c /dev/tty0 ]; then
+        cat "$log/status" >/dev/console
+    fi
+}
+
+platform_state() {
+    for device in /sys/bus/platform/devices/"$1".*; do
+        [ -e "$device" ] || continue
+        driver=$(readlink "$device/driver") || driver=unbound
+        echo "${driver##*/}"
+        return
+    done
+    echo 'absent'
+}
+
+# A UFS LUN and a USB stick may both appear as /dev/sd*. Classify
+# whole devices by their SCSI H:C:T:L parent and its host's proc_name.
+storage_status() {
+    ufs_hosts=
+    ufs_disks=
+    usb_disks=
+    for host in /sys/class/scsi_host/host*; do
+        [ -d "$host" ] || continue
+        kind=$(cat "$host/proc_name" 2>/dev/null)
+        host_name=${host##*/}
+        case "$kind" in
+            ufshcd*|UFSHCD*) ufs_hosts="${ufs_hosts:+$ufs_hosts }$host_name" ;;
+            usb-storage|uas) ;;
+            *)
+                # UAS sets its SCSI template name but may omit proc_name.
+                driver=$(readlink "$host/device/../driver") || continue
+                [ "${driver##*/}" = uas ] || continue
+                kind=uas ;;
+        esac
+        for disk in /sys/block/*; do
+            scsi=$(readlink -f "$disk/device") || continue
+            lun=${scsi##*/}
+            case $lun in
+                "${host_name#host}":*:*:*)
+                    label="${disk##*/}($lun)"
+                    case "$kind" in
+                        usb-storage|uas) usb_disks="${usb_disks:+$usb_disks }$label" ;;
+                        *) ufs_disks="${ufs_disks:+$ufs_disks }$label" ;;
+                    esac ;;
+            esac
+        done
+    done
+    printf 'UFS: host %s / whole devices %s\n' "${ufs_hosts:-none}" "${ufs_disks:-none}"
+    printf 'USB storage: whole devices %s\n' "${usb_disks:-none}"
+}
+
+usb_status() {
+    rtl=
+    mass_storage=
+    for usb in /sys/bus/usb/devices/*-*; do
+        [ -r "$usb/idVendor" ] || continue
+        drivers=
+        for usb_interface in "$usb":*; do
+            [ -r "$usb_interface/bInterfaceClass" ] || continue
+            driver=$(readlink "$usb_interface/driver") || driver=unbound
+            drivers="${drivers:+$drivers,}${driver##*/}"
+            if [ "$(cat "$usb_interface/bInterfaceClass")" = 08 ]; then
+                mass_storage="${mass_storage:+$mass_storage }${usb_interface##*/}(${driver##*/})"
+            fi
+        done
+        if is_rtl8153 "$usb"; then
+            rtl="${rtl:+$rtl }${usb##*/}(driver=${drivers:-unbound})"
+        fi
+    done
+    echo "RTL8153 USB: ${rtl:-not seen}"
+    echo "USB mass-storage interfaces: ${mass_storage:-none}"
+}
+
+iface=
+ifindex=
+dhcp_pid=
+tick=0
+while :; do
+    new_iface=$(find_nic)
+    new_index=
+    [ -z "$new_iface" ] || new_index=$(cat "/sys/class/net/$new_iface/ifindex" 2>/dev/null)
+    if [ "$new_iface:$new_index" != "$iface:$ifindex" ]; then
+        if [ -n "$dhcp_pid" ]; then
+            kill "$dhcp_pid" 2>/dev/null
+            wait "$dhcp_pid" 2>/dev/null
+        fi
+        iface=$new_iface
+        ifindex=$new_index
+        dhcp_pid=
+    fi
+    addr=
+    network='no matching NIC'
+    if [ -n "$iface" ]; then
+        if [ -z "$dhcp_pid" ] || ! kill -0 "$dhcp_pid" 2>/dev/null; then
+            ip link set "$iface" up
+            udhcpc -f -i "$iface" -s /bin/diag-dhcp -t 3 -T 3 -A 10 -O subnet -O router -x hostname:np545xla-diag >>"$log/dhcp.log" 2>&1 &
+            dhcp_pid=$!
+        fi
+        mac=$(cat "/sys/class/net/$iface/address")
+        carrier=$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)
+        addr=$(ip -4 addr show dev "$iface" | awk '$1 == "inet" {split($2,a,"/"); print a[1]; exit}')
+        case "$carrier:$addr" in
+            1:) network="$iface $mac / link up, waiting for DHCP" ;;
+            1:*) network="$iface $mac / $addr" ;;
+            *) network="$iface $mac / waiting for carrier"; addr= ;;
+        esac
+    fi
+
+    # A PID file can outlive its process or appear before listen(). Read
+    # the kernel socket table for the actual listening port (2222 = 08AE).
+    listening=$(awk '$2 ~ /:08AE$/ && $4 == "0A" {print "yes"; exit}' /proc/net/tcp /proc/net/tcp6 2>/dev/null)
+    host_key=$(cat "$log/fingerprint" 2>/dev/null)
+    {
+        echo "NP545XLA DIAG  $(uname -r)"
+        echo "Boot: $boot_id"
+        echo "Entry: ${entry:-unspecified}"
+        echo "Firmware: $firmware"
+        if [ "$firmware" = DT ]; then
+            echo "RSC: $(platform_state 18200000) / apps SMMU: $(platform_state 15000000) / GPU SMMU: $(platform_state 2ca0000) / UFS controller: $(platform_state 1d84000)"
+        fi
+        printf 'USB buses:'
+        for bus in /sys/bus/usb/devices/usb*; do [ ! -d "$bus" ] || printf ' %s' "${bus##*/}"; done
+        echo
+        printf 'USB devices:'
+        for node in /sys/bus/usb/devices/*-*; do
+            [ ! -r "$node/idVendor" ] || printf ' %s:%s' "$(cat "$node/idVendor")" "$(cat "$node/idProduct")"
+        done
+        echo
+        usb_status
+        storage_status
+        printf 'Input:'
+        for input in /sys/class/input/event*/device/name; do
+            [ ! -r "$input" ] || printf ' [%s]' "$(cat "$input")"
+        done
+        echo
+        disk_mounts=$(awk '$1 ~ /^\/dev\// {print $1}' /proc/mounts)
+        echo "Disk mounts: ${disk_mounts:-none}"
+        echo "Network: $network"
+        if [ "$listening" = yes ] && [ -n "$addr" ]; then
+            echo "SSH: ssh -p 2222 root@$addr"
+        elif [ "$listening" = yes ]; then
+            echo 'SSH: listening on 2222; waiting for network'
+        else
+            echo 'SSH: starting (see /run/diagnostics/ssh.log)'
+        fi
+        echo "Host key: ${host_key:-pending}"
+        echo 'Report: /run/diagnostics/report.txt'
+        if [ -r /sys/kernel/debug/devices_deferred ]; then
+            echo 'First deferred probes:'
+            head -4 /sys/kernel/debug/devices_deferred | cut -c1-100
+        fi
+    } > "$log/next"
+    if ! cmp -s "$log/next" "$log/status"; then
+        mv "$log/next" "$log/status"
+        display
+        diag-report
+        tick=0
+    elif [ "$tick" -ge 5 ]; then
+        diag-report
+        tick=0
+    fi
+    tick=$((tick + 1))
+    sleep 3
+done
