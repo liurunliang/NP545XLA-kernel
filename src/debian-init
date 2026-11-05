@@ -18,11 +18,20 @@ rescue() {
 }
 
 read -r expected </etc/np545-root-uuid || rescue 'missing embedded root UUID'
+separate_gpu_kms=1
+if [ "$0" = /debian-init-adreno ]; then
+    fw=/var/lib/np545xla-adreno/firmware
+    [ "$(cat /sys/module/firmware_class/parameters/path)" = "$fw" ] &&
+        (cd "$fw" && sha256sum -c SHA256SUMS) ||
+        rescue 'Adreno initramfs firmware path or checksum failed'
+    echo 'DEBIAN ADRENO: trial PID 1 verified the three firmware files'
+    separate_gpu_kms=0
+fi
 if grep -qw 'diag.mode=dt' /proc/cmdline; then
     for node in /sys/bus/platform/devices/*1d84000*; do
         [ ! -e "$node" ] || rescue 'internal UFS controller is enabled'
     done
-    modprobe phy_qcom_edp && modprobe panel_edp && modprobe msm separate_gpu_kms=1 ||
+    modprobe phy_qcom_edp && modprobe panel_edp && modprobe msm separate_gpu_kms=$separate_gpu_kms ||
         rescue 'native display modules failed to load'
 fi
 
@@ -68,6 +77,10 @@ done
 
 # Inspect the identity before journal replay or any writable mount.
 mount -t ext4 -o ro,noload "$target" /newroot || rescue "cannot inspect $target"
+if [ "$separate_gpu_kms" = 0 ]; then
+    (cd "/newroot$fw" && sha256sum -c "$fw/SHA256SUMS") ||
+        rescue 'USB root lacks the matching Adreno trial firmware'
+fi
 [ -x /newroot/usr/lib/systemd/systemd ] &&
     awk -v uuid="UUID=$expected" '$1 == uuid && $2 == "/" && $3 == "ext4" {found++} END {exit found != 1}' /newroot/etc/fstab ||
     rescue 'Debian root identity or init does not match'

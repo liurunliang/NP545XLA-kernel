@@ -2,6 +2,11 @@
 # Add a board-test entry to the accepted USB menu without rebuilding the root.
 set -euo pipefail
 export LC_ALL=C
+overlay=
+if [[ ${1:-} == --adreno-overlay ]]; then
+    overlay=$(sha256sum "$2" | cut -d' ' -f1)
+    shift 2
+fi
 [[ $# == 2 ]] || { echo "Usage: $0 debian-image-manifest.txt BOOTAA64.EFI" >&2; exit 2; }
 src=$(cd "$(dirname "$0")" && pwd)
 bundle=$(awk '$1 == "Bundle:" {print $2}' "$1")
@@ -14,11 +19,16 @@ trap 'rm -rf "$stage"' EXIT
     cat <<'GRUB'
 function desktop_boot {
     set diag_entry=Debian-daily
+    set handoff=debian_boot
+    if [ "$2" = unified ]; then
+        set diag_entry=Debian-unified
+        set handoff=adreno_boot
+    fi
     # These DTs exist only on the writable FAT ESP. Its original boot
     # directory also exists on ISO9660.
     if search --no-floppy --file --set=root "$1"; then
         if devicetree "$1"; then
-            debian_boot acpi=off efi=novamap clk_ignore_unused pd_ignore_unused regulator_ignore_unused console=ttyMSM0,115200 console=tty0 loglevel=3 log_buf_len=16M diag.mode=dt diag.display=native np545.daily=1
+            $handoff acpi=off efi=novamap clk_ignore_unused pd_ignore_unused regulator_ignore_unused console=ttyMSM0,115200 console=tty0 loglevel=3 log_buf_len=16M diag.mode=dt diag.display=native np545.daily=1
         fi
     fi
     diag_stop 'Daily DT unavailable. Restart and select the original Debian entry.'
@@ -33,6 +43,9 @@ if search --no-floppy --file --set=daily_previous /boot/previous-@BUNDLE@.dtb; t
 fi
 if [ "$default" = debian ]; then set default=daily; fi
 GRUB
+    if [[ -n $overlay ]]; then
+        sed "s/@OVERLAY_SHA256@/$overlay/g" "$src/adreno-grub.cfg"
+    fi
 } | sed "s/@BUNDLE@/$bundle/g" > "$stage/grub.cfg"
 grub-script-check "$stage/grub.cfg"
 modules='part_gpt fat iso9660 normal configfile linux fdt search search_fs_file echo sleep test boot smbios'

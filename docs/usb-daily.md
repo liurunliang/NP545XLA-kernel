@@ -42,6 +42,23 @@ sudo bash install-daily-boot.sh manifest.txt daily.dtb BOOTAA64.EFI
 
 如需完整恢复旧菜单，可在第四项 Debian 中重新核对 USB 根与同盘 EFI 分区，并用保留的 `BOOTAA64.EFI.baseline` 替换该分区上的 `BOOTAA64.EFI`。原始整盘镜像则保存在 Mac。
 
+### Adreno 统一 DRM 试验入口
+
+这个可选菜单项让内置屏幕与 GPU 共用一个 DRM 设备，供 Xorg 的 modesetting 驱动在内屏尝试 Glamor 加速。它复用当前日用 DT、内核和 USB 根盘，额外载入约 45 KiB 的 initramfs 补充包。补充包中的独立 PID 1 在加载 MSM 之前校验三份固件，然后传入 `separate_gpu_kms=0`。只读检查根分区时，它还会验证切换到 Debian 后同一路径有相同的固件。固件路径为 `/var/lib/np545xla-adreno/firmware`。[Linux v7.0 的 MSM 设备模式](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/msm/msm_drv.c)
+
+用已验证来源的 Debian SQE、GMU 目录和三星原厂驱动包中的签名 ZAP 文件在 ARM64 Debian 中生成试验包。检查 `daily.dtb` 是当前 U 盘已启动并验收的版本。在三星上执行后两条命令，将固件保存在持久目录，并安装试验菜单。
+
+```sh
+src/build-adreno-boot.sh manifest.txt debian-firmware qcdxkmsuc8180.mbn unified-trial
+# 在三星 USB Debian 上使用以上固件、unified-trial、清单和当前的 daily.dtb。
+sudo bash install-adreno-firmware.sh debian-firmware qcdxkmsuc8180.mbn
+sudo bash install-daily-boot.sh --adreno unified-trial manifest.txt daily.dtb
+```
+
+手动选择 **Debian 13 - Adreno unified DRM trial (Samsung)**。启动后读取 `/sys/module/msm/parameters/separate_gpu_kms`，该入口应返回 `N`。检查 `/sys/class/drm/` 中连接 eDP 的卡在同一设备下拥有渲染节点，再检查会话的渲染器与实际出帧。传统日用入口会传入 `separate_gpu_kms=1`，它仍是三星的默认项。若试验画面异常，重新开机并等待默认倒计时即可回到该入口。安装脚本首次安装时将这之前的日用启动器保存在同一 USB EFI 分区的 `/EFI/BOOT/BOOTAA64.EFI.pre-adreno`。
+
+在 QEMU 中，以 `NP545XLA-ADRENO-QEMU` 产品标识通过 ACPI 冷启动，验证了两个 initramfs 的拼接、两次固件校验以及 USB 根盘上的 SSH 登录。再次选择原 Debian QEMU 入口时，固件搜索参数为空。三星上已重新挂载 USB EFI 分区，比对了新菜单、补充包及用于回退的启动器。统一模式的 X11 加速呈现与物理 eDP 输出需要在三星上单独验收。
+
 ## 启动探测日志
 
 这台机器的键盘异常报告可在一秒内覆盖原来的内核缓冲区。日用入口将缓冲区设为 16 MiB。在三星 Debian 上安装限时记录服务并启用，下一次该入口开机时，前三分钟的驱动探测信息会保存到内存中的 `/run/np545xla-daily-probe.log`。

@@ -3,7 +3,12 @@
 set -euo pipefail
 export LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin
 die() { echo "$*" >&2; exit 1; }
-[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 debian-image-manifest.txt daily.dtb BOOTAA64.EFI"
+trial=
+if [[ ${1:-} == --adreno && $# == 4 ]]; then
+    trial=$(realpath "$2")
+    set -- "$3" "$4" "$trial/BOOTAA64.EFI"
+fi
+[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb"
 manifest=$(realpath "$1")
 dt=$(realpath "$2")
 efi=$(realpath "$3")
@@ -14,6 +19,14 @@ uuid=$(awk '$1 == "Root" && $2 == "UUID:" {print $3}' "$manifest")
 rootdev=$(findmnt -no SOURCE /)
 disk=$(lsblk -ndo PKNAME "$rootdev")
 [[ -n $disk && $(lsblk -ndo TRAN "/dev/$disk") == usb ]] || die 'Root is not on a physical USB disk'
+if [[ -n $trial ]]; then
+    # Verify the EFI, overlay and firmware list as a set. Require exactly
+    # these three package filenames before following any checksum paths.
+    [[ $(awk '{print $2}' "$trial/SHA256SUMS") == $'BOOTAA64.EFI\nadreno.cpio.gz\nfirmware.sha256' ]] ||
+        die 'Invalid Adreno trial package'
+    (cd "$trial" && sha256sum --strict -c SHA256SUMS)
+    (cd /var/lib/np545xla-adreno/firmware && sha256sum --strict -c "$trial/firmware.sha256")
+fi
 [[ $(fdtget "$dt" / compatible) == *samsung,np545xla* ]] || die 'DT belongs to a different machine'
 [[ $(fdtget "$dt" /soc@0/ufshc@1d84000 status) == disabled ]] || die 'Daily DT must disable internal UFS'
 keyboard=/soc@0/geniqup@ac0000/i2c@a80000/keyboard@5
@@ -51,8 +64,15 @@ install_verified() {
     sync -f "$target"
     cmp "$input" "$target"
 }
-if [[ ! -f $loader.baseline ]]; then install_verified "$loader" "$loader.baseline"; fi
 current="$boot/daily-$bundle.dtb"
+if [[ -n $trial ]]; then
+    cmp -s "$dt" "$current" || die 'Adreno trial requires the currently installed daily DT'
+    [[ -s $loader.baseline ]] || die 'Install and test the standard daily entry first'
+    digest=$(sha256sum "$trial/adreno.cpio.gz" | cut -d' ' -f1)
+    if [[ ! -f $loader.pre-adreno ]]; then install_verified "$loader" "$loader.pre-adreno"; fi
+    install_verified "$trial/adreno.cpio.gz" "$boot/adreno-$digest.cpio.gz"
+fi
+if [[ ! -f $loader.baseline ]]; then install_verified "$loader" "$loader.baseline"; fi
 if [[ -s $current ]] && ! cmp -s "$dt" "$current"; then
     install_verified "$current" "$boot/previous-$bundle.dtb"
 fi
