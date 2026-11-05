@@ -1,6 +1,6 @@
 # NP545XLA Kernel
 
-> **Hardware status, 2026-11-05.** The diagnostic USB boots Linux 7.0 on the NP545XLA-KA1TT using the Samsung device tree. Wired SSH over an RTL8153 adapter works. The internal screen can go dark after the boot messages. The Ubuntu live image is still in development. [Build instructions and hardware results](docs/usb-linux-diag.md)
+> **Hardware status, 2026-11-05.** The diagnostic USB boots Linux 7.0 on the NP545XLA-KA1TT using the Samsung device tree. Wired SSH over an RTL8153 adapter works. The internal screen goes dark with the EFI framebuffer alone. Loading the native display driver restored a legible 1920x1080 diagnostic console. The Ubuntu live image is still in development. [Build instructions and hardware results](docs/usb-linux-diag.md)
 
 Custom Linux kernel + boot ISO for the Samsung Galaxy Book Go 5G (SC8180XP).
 
