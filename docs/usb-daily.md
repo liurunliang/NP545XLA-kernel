@@ -67,6 +67,23 @@ sudo bash install-daily-boot.sh --adreno unified-trial-v2 manifest.txt daily.dtb
 
 三星 DSDT 按 `SOID=0x194`、`SIDV=0x20001`、`SIDT=3` 为 Windows 选择 GPU 表 P003，活动频率为 156、235、315、392、530、595、625、670、718 MHz。Linux v7.0 原 DT 提供 177、256、315、405、461、500、514 MHz。第一版实机的 `simple_ondemand` 在 177、405 与 514 MHz 之间记录到 178 次转换。第二版沿用这个策略与频率表，以便检验驱动修复。两套表共同列出的 315 MHz 可在后续诊断中用作固定频率对照。[三星 DSDT](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L85690) · [Linux v7.0 设备树](https://github.com/torvalds/linux/blob/v7.0/arch/arm64/boot/dts/qcom/sc8180x.dtsi#L2286)
 
+### 合盖开关和睡眠
+
+在原 Adreno 入口上，手动浅睡眠后用触控板唤醒已实测通过。三星固件用 GPIO50 读取盖子，实机合盖时电平变低、开盖时恢复高。旧设备树将同组的电源键连到 PMIC 的原生按键设备，内核找不到 GPIO 控制器的 `#gpio-cells`，导致整组 `gpio-keys` 注册失败。修正只删去重复的 `/gpio-keys/power-key`，保留 GPIO50 上的 `SW_LID`、它的唤醒标记和 PMIC 自身的电源键节点。
+
+要在已经通过验收的 Adreno 安装上重建盖子试验入口，先用构建 Mac 上的 Debian ARM64 环境运行下面的命令。参数中的 `output/daily/eckb/daily.dtb` 是这台机器当前 SanDisk 上的原日用设备树副本。构建器将修正后的完整设备树与预期的单节点差异比对。
+
+```sh
+mkdir -p output/daily/lid-test
+src/build-debian-lid-dtb.sh output/daily/eckb/daily.dtb output/daily/lid-test/daily-lid.dtb
+src/build-lid-boot.sh output/debian-final/manifest.txt output/adreno/default-menu \
+    output/daily/eckb/daily.dtb output/daily/lid-test/daily-lid.dtb output/daily/lid-test/boot
+```
+
+把生成的 `boot` 目录、清单及对应版本的安装脚本复制到三星 USB Debian，执行 `sudo bash src/install-daily-boot.sh --lid output/daily/lid-test/boot output/debian-final/manifest.txt`。安装器先核对当前 U 盘的根分区、设备树、Adreno 驱动包和启动器指纹，再新增按 SHA-256 命名的设备树及其菜单项。手动选 **Debian 13 - Lid test (Samsung)** 使用修正，`/proc/cmdline` 会包含 `np545.lid=1`。这个菜单的倒计时仍进入此前的 Adreno 桌面。
+
+在 SanDisk 上首次安装后，卸载再只读挂载，已核对启动分区全部 14 个文件。候选 DTB 的 SHA-256 为 `16c50d3e0048fda7ce311888db605346845f7ecde279c42fdfa7f3e4fdcc4de1`，EFI 为 `81e381fe2af8aeb5095fc25b6b1b8bd7f73be499f4dd1ed8f4ef24725e481278`。使用同一 EFI 的 ARM64 QEMU 已验证倒计时加载原日用设备树、手选试验入口加载候选设备树、候选缺失时明确报错。QEMU 的测试范围截至 GRUB 选取设备树。
+
 ## 启动探测日志
 
 这台机器的键盘异常报告可在一秒内覆盖原来的内核缓冲区。日用入口将缓冲区设为 16 MiB。在三星 Debian 上安装限时记录服务并启用，下一次该入口开机时，前三分钟的驱动探测信息会保存到内存中的 `/run/np545xla-daily-probe.log`。
