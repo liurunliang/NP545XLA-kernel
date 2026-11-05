@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/*
+ * The Samsung DSDT reports PRP0=1, PRP2=0xffffffff, and implements
+ * QPPX._RST(0) for WLAN, while _RST(2) is empty. Keep the firmware's
+ * WLAN_EN, PERST, pinmux and rail settings for this first link test.
+ */
+&{/soc@0/phy@1c06000} { status = "okay"; };
+&{/soc@0/pcie@1c00000} { status = "okay"; };
+&{/soc@0/pcie@1c18000} { status = "disabled"; };
+&{/soc@0/phy@1c1c000} { status = "disabled"; };
+
+/* Windows enumerates a discrete 17cb:1101 QCA639x, not the on-SoC WCN3990. */
+&{/soc@0/wifi@18800000} { status = "disabled"; };
