@@ -26,6 +26,8 @@ while (($#)); do
 done
 [[ -r "$key" && -n "$work" ]] || { usage >&2; exit 2; }
 [[ $(uname -sm) == 'Linux aarch64' ]] || { echo 'Use a native ARM64 Linux builder.' >&2; exit 1; }
+source_revision=$(git -C "$repo" rev-parse HEAD)
+source_status=$(git -C "$repo" status --porcelain --untracked-files=normal)
 key=$(realpath "$key")
 mkdir -p "$work" "$output"
 work=$(realpath "$work")
@@ -108,8 +110,8 @@ cmp "$tree/EFI/BOOT/BOOTAA64.EFI" "$stage/esp-readback.efi"
     sha256sum "$name" > "$name.sha256"
     {
         echo "Board: Samsung Galaxy Book Go 5G NP545XLA"
-        echo "Source revision: $(git -C "$repo" rev-parse HEAD)"
-        if [[ -n $(git -C "$repo" status --porcelain --untracked-files=normal) ]]; then echo 'Source tree: modified'; fi
+        echo "Source revision: $source_revision"
+        if [[ -n $source_status ]]; then echo 'Source tree: modified'; fi
         echo "Linux: v7.0 ($kernel_sha, linux-7.0.tar.xz)"
         echo "Firmware: firmware-realtek_20250410-2 ($firmware_sha)"
         echo "Public key: $(ssh-keygen -E sha256 -lf "$key" | awk '{print $2}')"
