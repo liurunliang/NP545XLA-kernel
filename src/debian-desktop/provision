@@ -1,10 +1,10 @@
 #!/bin/bash
-# Run as root on the persistent Debian system. Keep prepare-xorg alongside it.
+# Run as root on the persistent Debian system from the complete desktop directory.
 set -euo pipefail
 export LC_ALL=C
 cd "$(dirname "$0")"
 [[ $EUID == 0 && $(dpkg --print-architecture) == arm64 ]] || { echo 'Run as root on Debian arm64.' >&2; exit 1; }
-[[ -f /etc/systemd/network/20-np545xla-wired.network && -f prepare-xorg ]] || { echo 'Expected the NP545XLA Debian image and desktop helpers.' >&2; exit 1; }
+[[ -f /etc/systemd/network/20-np545xla-wired.network && -f prepare-xorg && -f greeter-osk.conf ]] || { echo 'Expected the NP545XLA Debian image and desktop helpers.' >&2; exit 1; }
 systemctl is-active --quiet systemd-networkd.service
 systemctl is-active --quiet ssh.service
 passwd -S liurunliang
@@ -32,6 +32,7 @@ ipv4.route-metric=3000
 ipv6.route-metric=3000
 CONF
 install -m 0755 prepare-xorg /usr/local/libexec/np545xla-prepare-xorg
+install -Dm 0644 greeter-osk.conf /etc/lightdm/lightdm-gtk-greeter.conf.d/90-np545xla-onscreen-keyboard.conf
 cat > /etc/lightdm/lightdm.conf.d/90-np545xla.conf <<'CONF'
 [Seat:*]
 greeter-session=lightdm-gtk-greeter
@@ -62,7 +63,8 @@ apt-get install -y --no-install-recommends \
     xfce4 xfce4-terminal lightdm lightdm-gtk-greeter xserver-xorg-core \
     xserver-xorg-input-libinput libinput-tools xinput x11-xserver-utils x11-utils mesa-utils \
     libgl1-mesa-dri firefox-esr fonts-noto-cjk network-manager network-manager-gnome \
-    wpasupplicant dbus-user-session libpam-systemd
+    wpasupplicant dbus-user-session libpam-systemd \
+    onboard gsettings-desktop-schemas gir1.2-atspi-2.0 at-spi2-core
 systemctl enable --now NetworkManager.service
 systemctl disable NetworkManager-wait-online.service
 systemctl enable lightdm.service
