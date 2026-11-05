@@ -2,6 +2,9 @@
 # Generate a full snapshot on demand. A rename keeps SSH reads consistent.
 set -u
 out=/run/diagnostics
+snapshot="$out/dmesg.$$"
+trap 'rm -f "$snapshot"' EXIT
+dmesg > "$snapshot" 2>&1
 {
     cat "$out/status"
     echo
@@ -35,7 +38,33 @@ out=/run/diagnostics
     for logfile in "$out"/dhcp.log "$out"/ssh.log; do
         [ ! -f "$logfile" ] || tail -50 "$logfile"
     done
-    echo '--- Kernel messages ---'
-    dmesg
+    echo '--- I2C HID incomplete reports (current kernel ring only) ---'
+    awk '
+        /i2c_hid_get_input: incomplete report/ && match($0, /^\[[[:space:]]*[0-9]+\.[0-9]+\]/) {
+            stamp = substr($0, 2, RLENGTH - 2) + 0
+            device = substr($0, RLENGTH + 1)
+            sub(/^[[:space:]]+/, "", device)
+            sub(/: i2c_hid_get_input:.*/, "", device)
+            if (!(device in count)) first[device] = stamp
+            last[device] = stamp
+            count[device]++
+            total++
+        }
+        END {
+            if (!total) print "No matching records"
+            for (device in count) {
+                span = last[device] - first[device]
+                printf "%s: %d records, first %.6f s, last %.6f s", device, count[device], first[device], last[device]
+                if (span > 0) printf ", %.1f records/s", (count[device] - 1) / span
+                print ""
+            }
+        }
+    ' "$snapshot"
+    echo '--- I2C HID IRQ counters (since boot, currently registered) ---'
+    grep -Ei 'hid[-_]over[-_]i2c|i2c[-_]hid' /proc/interrupts || echo 'No matching IRQ counters'
+    echo '--- Early kernel messages (saved once at /init) ---'
+    cat "$out/boot-dmesg.txt"
+    echo '--- Kernel messages (current ring) ---'
+    cat "$snapshot"
 } > "$out/report.$$" 2>&1
 mv "$out/report.$$" "$out/report.txt"

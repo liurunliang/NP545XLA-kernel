@@ -5,16 +5,19 @@ umask 077
 mount -t devtmpfs devtmpfs /dev
 exec </dev/console >/dev/console 2>&1
 echo 'NP545XLA DIAG: /init started'
+# Capture the earliest userspace view before probes or the status screen can
+# spend time on devices. Later ring snapshots can contain only recent IRQs.
+mount -t tmpfs -o mode=755 tmpfs /run
+log=/run/diagnostics
+mkdir -p "$log"
+dmesg > "$log/boot-dmesg.txt" 2>&1
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts
-mount -t tmpfs -o mode=755 tmpfs /run
 mount -t debugfs -o nosuid,nodev,noexec debugfs /sys/kernel/debug
 hostname np545xla-diag
 ip link set lo up
-log=/run/diagnostics
-mkdir -p "$log"
 
 # ACPI boot on arm64 can expose a minimal EFI device tree. Look for an
 # active DSDT first and report DT mode only if a hardware compatible exists.

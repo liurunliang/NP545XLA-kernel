@@ -88,23 +88,50 @@ start_vm() {
 await_serial() {
     local marker=$1
     until grep -aFq "$marker" "$serial" 2>/dev/null; do
+        if grep -aFq 'GRUB STOP:' "$serial" 2>/dev/null; then
+            die "GRUB stopped before '$marker' (see $serial)"
+        fi
         kill -0 "$pid" 2>/dev/null || die "QEMU exited before '$marker' (see $output)"
         ((SECONDS < deadline)) || die "timed out waiting for '$marker' in $serial"
         sleep 1
     done
 }
 
+check_acpi_handoff() {
+    # Inspect the trace in order, after the guest has reached userspace.
+    awk '
+        BEGIN {
+            phase = 1
+            marker[1] = "GRUB ACPI: media "
+            marker[2] = "GRUB ACPI: loading Linux"
+            marker[3] = "GRUB ACPI: Linux accepted"
+            marker[4] = "GRUB ACPI: initrd registered"
+            marker[5] = "GRUB ACPI: before EFI boot"
+            marker[6] = "NP545XLA DIAG"
+        }
+        phase <= 6 && index($0, marker[phase]) { phase++ }
+        END {
+            if (phase <= 6) {
+                print "Missing or out-of-order marker: " marker[phase] > "/dev/stderr"
+                exit 1
+            }
+        }
+    ' "$serial" || die "default ACPI handoff check failed in $serial"
+}
+
 start_vm offline
 for marker in "NP545XLA DIAG" "Entry: acpi" "Firmware: ACPI" "Network: no matching NIC" "USB storage: whole devices sda(" "Disk mounts: none"; do
     await_serial "$marker"
 done
+check_acpi_handoff
 stop_vm
-echo "Offline console passed."
+echo "Default ACPI handoff and offline console passed."
 
 start_vm online
 for marker in "Firmware: ACPI" "Host key: SHA256:" "SSH: ssh -p 2222 root@"; do
     await_serial "$marker"
 done
+check_acpi_handoff
 fingerprint=$(sed -nE 's/.*Host key: (SHA256:[A-Za-z0-9+\/]+).*/\1/p' "$serial" | tail -n 1)
 [[ -n "$fingerprint" ]] || die "missing Ed25519 fingerprint in $serial"
 known_hosts="$output/known_hosts"
@@ -119,7 +146,7 @@ ssh_opts=(-F /dev/null -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o Identi
           -o "UserKnownHostsFile=\"$known_hosts\"" -o GlobalKnownHostsFile=/dev/null)
 report="$output/report.txt"
 ssh "${ssh_opts[@]}" -i "$identity" root@127.0.0.1 \
-    'test "$(id -u)" = 0 && test "$(uname -m)" = aarch64 && cat /run/diagnostics/report.txt' >"$report"
+    'test "$(id -u)" = 0 && test "$(uname -m)" = aarch64 && grep -Fq "Linux version" /run/diagnostics/boot-dmesg.txt && cat /run/diagnostics/report.txt' >"$report"
 grep -Fq "Firmware: ACPI" "$report" && grep -Fq "Disk mounts: none" "$report" ||
     die "the report lacks the ACPI or disk-mount confirmation"
 
