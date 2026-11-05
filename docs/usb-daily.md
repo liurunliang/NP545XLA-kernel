@@ -1,6 +1,6 @@
 # 在持久化 Debian U 盘上试验内置设备
 
-启动菜单的前三项仍是诊断系统，第四项使用已验收的原 Debian 设备树。第五项使用单独的日用设备树，实机默认选它。两个 Debian 入口共用同一份根文件系统、系统账户、内核和 initramfs，均关闭内置 UFS。第四项可用于排查新的设备树带来的启动问题。
+启动菜单的前三项仍是诊断系统，第四项使用已验收的原 Debian 设备树。第五项使用单独的日用设备树，实机默认选它。两个 Debian 入口共用同一份根文件系统、系统账户、内核和 initramfs，均关闭内置 UFS。更新日用设备树后，菜单末尾的 **previous daily device tree** 可启动前一版日用配置。第四项始终提供原 Debian 设备树。
 
 ## 生成设备树与菜单
 
@@ -8,13 +8,16 @@
 
 ```sh
 src/build-debian-touchpad-probe-dtb.sh debian-samsung.dtb touchpad.dtb
-fdtoverlay -i touchpad.dtb -o daily.dtb output/daily/wifi/sc8180xp-np545xla-wifi.dtbo
+fdtoverlay -i touchpad.dtb -o pci0.dtb output/daily/wifi/sc8180xp-np545xla-wifi.dtbo
+src/build-debian-wifi-phy-dtb.sh pci0.dtb daily.dtb
 src/build-daily-efi.sh output/debian-final/manifest.txt BOOTAA64.EFI
 ```
 
 Windows 枚举把 `SSTP0001` 下的子设备标为 Samsung TPD 和 HID 鼠标。三星 DSDT 的 `I2C1.TCPD` 位于 400 kHz 的 GENI 控制器（880000.i2c），设备地址是 0x40，HID 描述符寄存器是 0x0e。其运行态供电表声明 LDO11_C，电压为 3.3 V。原设备树的 0x62 对应 Samsung EC2。
 
 固件为触控板提供的虚拟中断脚是 448。按 Qualcomm 公开的 WoA 映射，448 / 64 取 GIO0 的第 7 项（从 0 开始），得到 GSI 590。减 32 得 SPI 558，对照本 SoC 的 PDC 范围得到 PDC 78，再查 SC8180x 的 wakeirq_map 得到 GPIO104。独立对照用合盖信号，其虚拟脚 320 映射为 GPIO50，与 DSDT 里读取盖子状态的 LIDR 一致。[Qualcomm 工程师的映射算法](https://marc.info/?l=devicetree&m=178272904036845&w=3) · [Linux v7.0 SC8180x 引脚表](https://github.com/torvalds/linux/blob/v7.0/drivers/pinctrl/qcom/pinctrl-sc8180x.c)
+
+同一算法把键盘 ECKB 的虚拟脚 640 映射为 GPIO125（第 10 项，GSI 605、SPI 573、PDC 93）。日用设备树将键盘中断设为 GPIO125、低电平触发、上拉。原来使用 GPIO91 的日用入口在一次实机启动中出现了两次 `a80000.i2c: Bus arbitration lost, clock line undriveable`，键盘未绑定；该阶段驱动正在探测 I²C 设备，尚未注册键盘中断。后续验收须分别确认 `a80000.i2c` 上地址 0x05 能绑定、GPIO125 在按键时产生中断，并且桌面收到键盘输入。[Linux v7.0 HID 探测顺序](https://github.com/torvalds/linux/blob/v7.0/drivers/hid/i2c-hid/i2c-hid-core.c)
 
 ## 安装与回退
 
@@ -47,3 +50,5 @@ sudo systemctl enable np545xla-daily-probe.service
 ## 已验收的实机结果
 
 2026-11-05，在原持久化 Debian 上安装桌面后，LightDM 以 X11 启动 GTK 登录页。`xrandr` 实测内屏为 1920×1080、60 Hz，Xorg 使用连接 eDP 的 MSM KMS 卡和软件渲染。有线 SSH 在整个安装中保持可用。Firefox ESR 153.6.0 以普通用户和临时配置通过有线网络打开 Debian 官网，取回的渲染截图中可见首页和下载入口。桌面与驱动安装后，12 GiB 根分区还有约 9.6 GiB 可用。这些检查先于新设备树的触控板和 Wi-Fi 现场验收。
+
+首版日用设备树已在三星上绑定 `14E5:650E` 的 HID 多点触控驱动，输入设备来自 880000.i2c 的 0x40。两次启动均完成枚举。现场在登录页实测用内置触控板移动指针并点击；GPIO104 中断随使用累计到 1,528 次。无线控制器在初始化 PCIe0 PHY 时报告超时，此时还没有 PCI 无线设备。

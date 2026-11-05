@@ -7,7 +7,7 @@ After=local-fs.target
 Type=exec
 # The built-in keyboard can emit over 2000 incomplete packets per second.
 # Filter before storage and stop once early driver probes have settled.
-ExecStart=/bin/bash -c "/usr/bin/timeout 180 /usr/bin/dmesg --follow --color=never | /usr/bin/awk '/incomplete report/ { next } /[Pp][Cc][Ii]|ath11k|firmware|[Mm][Hh][Ii]|regulat|supply|[Ii]2[Cc]|[Hh][Ii][Dd]|gpio|pinctrl|geni/ { print; fflush() }'"
+ExecStart=/bin/bash -c "/usr/bin/timeout 180 /usr/bin/stdbuf -oL /usr/bin/dmesg --follow --color=never | /usr/bin/grep --line-buffered -Fv 'incomplete report' | /usr/bin/grep --line-buffered -Ei 'pci|ath11k|firmware|mhi|regulat|supply|i2c|hid|gpio|pinctrl|geni'"
 StandardOutput=truncate:/run/np545xla-daily-probe.log
 UMask=0077
 LimitFSIZE=8M

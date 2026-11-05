@@ -47,7 +47,11 @@ install_verified() {
     cmp "$input" "$target"
 }
 if [[ ! -f $loader.baseline ]]; then install_verified "$loader" "$loader.baseline"; fi
-install_verified "$dt" "$boot/daily-$bundle.dtb"
+current="$boot/daily-$bundle.dtb"
+if [[ -s $current ]] && ! cmp -s "$dt" "$current"; then
+    install_verified "$current" "$boot/previous-$bundle.dtb"
+fi
+install_verified "$dt" "$current"
 install_verified "$efi" "$loader"
 sha256sum "$loader" "$loader.baseline" "$boot/daily-$bundle.dtb"
 echo "Updated $esp on /dev/$disk. Original Debian and the three diagnostic entries are available."

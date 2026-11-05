@@ -12,17 +12,25 @@ trap 'rm -rf "$stage"' EXIT
 {
     cat "$src/diag-grub.cfg" "$src/debian-grub.cfg"
     cat <<'GRUB'
-menuentry 'Debian 13 - daily desktop (Samsung)' --id daily {
+function desktop_boot {
     set diag_entry=Debian-daily
-    # The test DT exists only on the writable FAT ESP. The original boot
-    # directory also exists on ISO9660, so the usual marker is ambiguous here.
-    if search --no-floppy --file --set=root /boot/daily-@BUNDLE@.dtb; then
-        if devicetree /boot/daily-@BUNDLE@.dtb; then
+    # These DTs exist only on the writable FAT ESP. Its original boot
+    # directory also exists on ISO9660.
+    if search --no-floppy --file --set=root "$1"; then
+        if devicetree "$1"; then
             debian_boot acpi=off efi=novamap clk_ignore_unused pd_ignore_unused regulator_ignore_unused console=ttyMSM0,115200 console=tty0 loglevel=3 log_buf_len=16M diag.mode=dt diag.display=native np545.daily=1
         fi
     fi
     diag_stop 'Daily DT unavailable. Restart and select the original Debian entry.'
 }
+menuentry 'Debian 13 - daily desktop (Samsung)' --id daily {
+    desktop_boot /boot/daily-@BUNDLE@.dtb
+}
+if search --no-floppy --file --set=daily_previous /boot/previous-@BUNDLE@.dtb; then
+    menuentry 'Debian 13 - previous daily device tree' --id daily-previous {
+        desktop_boot /boot/previous-@BUNDLE@.dtb
+    }
+fi
 if [ "$default" = debian ]; then set default=daily; fi
 GRUB
 } | sed "s/@BUNDLE@/$bundle/g" > "$stage/grub.cfg"
