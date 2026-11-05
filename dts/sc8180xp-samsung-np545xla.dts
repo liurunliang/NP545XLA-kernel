@@ -346,7 +346,8 @@
 	keyboard@5 {
 		compatible = "hid-over-i2c";
 		reg = <0x05>;
-		hid-descr-addr = <0x1>;
+		/* ECKB._DSM (HID-I2C, function 1) in the Samsung DSDT. */
+		hid-descr-addr = <0x20>;
 
 		/* ACPI: gpio640 — needs verification. Not gpio89 (I2C SDA).
 		 * Likely a different TLMM pin or PMIC GPIO.
