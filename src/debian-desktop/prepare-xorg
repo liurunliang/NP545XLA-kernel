@@ -1,0 +1,34 @@
+#!/bin/sh
+# LightDM runs this before starting X. DRM card numbers may change on reboot.
+set -eu
+runtime=/run/np545xla-desktop
+install -d -m 755 "$runtime"
+for attempt in $(seq 1 20); do
+    for connector in /sys/class/drm/card*-eDP-*; do
+        [ -r "$connector/status" ] && [ "$(cat "$connector/status")" = connected ] || continue
+        card=${connector##*/}
+        card=${card%%-eDP-*}
+        [ -c "/dev/dri/$card" ] || continue
+        syspath=$(readlink -f "/sys/class/drm/$card")
+        {
+            printf 'Section "Device"\n  Identifier "Samsung eDP"\n  Driver "modesetting"\n'
+            printf '  BusID "platform:%s"\n  Option "kmsdev" "/dev/dri/%s"\n' "$syspath" "$card"
+            # The split MSM KMS card has scanout but no render node of its own.
+            set -- "/sys/class/drm/$card/device/drm"/renderD*
+            if [ ! -e "$1" ]; then
+                printf '  Option "AccelMethod" "none"\n  Option "SWcursor" "true"\n'
+                touch "$runtime/software-render"
+            else
+                rm -f "$runtime/software-render"
+            fi
+            printf 'EndSection\nSection "Screen"\n  Identifier "Internal LCD"\n  Device "Samsung eDP"\nEndSection\n'
+            printf 'Section "ServerFlags"\n  Option "AutoAddGPU" "false"\nEndSection\n'
+        } > "$runtime/xorg.conf.new"
+        mv "$runtime/xorg.conf.new" "$runtime/xorg.conf"
+        echo "Xorg eDP: $connector on /dev/dri/$card ($syspath)"
+        exit 0
+    done
+    sleep 1
+done
+echo "No connected native eDP connector with a DRM card." >&2
+exit 1
