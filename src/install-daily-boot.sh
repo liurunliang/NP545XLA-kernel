@@ -16,7 +16,12 @@ disk=$(lsblk -ndo PKNAME "$rootdev")
 [[ -n $disk && $(lsblk -ndo TRAN "/dev/$disk") == usb ]] || die 'Root is not on a physical USB disk'
 [[ $(fdtget "$dt" / compatible) == *samsung,np545xla* ]] || die 'DT belongs to a different machine'
 [[ $(fdtget "$dt" /soc@0/ufshc@1d84000 status) == disabled ]] || die 'Daily DT must disable internal UFS'
-[[ $(fdtget -d okay "$dt" /soc@0/geniqup@ac0000/i2c@a80000/keyboard@5 status) == okay ]] || die 'Keyboard is disabled'
+keyboard=/soc@0/geniqup@ac0000/i2c@a80000/keyboard@5
+[[ $(fdtget -d okay "$dt" "$keyboard" status) == okay ]] || die 'Keyboard is disabled'
+if [[ $(fdtget "$dt" "$keyboard" compatible) == samsung,np545xla-eckb ]]; then
+    [[ $(modprobe -R 'of:NkeyboardT(null)Csamsung,np545xla-eckb') == np545_eckb ]] ||
+        die 'Install the np545xla-eckb package for this kernel before updating the daily DT'
+fi
 grub-file --is-arm64-efi "$efi" || die 'Invalid ARM64 EFI program'
 mapfile -t esps < <(lsblk -nrpo NAME,PARTTYPE "/dev/$disk" | awk 'tolower($2) == "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" {print $1}')
 [[ ${#esps[@]} == 1 ]] || die 'Expected one EFI partition on the same disk as root'

@@ -99,4 +99,7 @@ fdtput -t s "$stage" "$ec" status disabled
 # ECKB GIO0 pin 640 -> bank 10 -> GSI 605 -> SPI 573 -> PDC 93 -> TLMM125.
 fdtput -t s "$stage" "$keyboard_state" pins gpio125
 fdtput -t x "$stage" "$keyboard" interrupts-extended "$tlmm_handle" 7d 8
+# The EC accepts register reads but the generic driver's initial byte read fails.
+# Use the dedicated OF alias so udev loads the matching USB-root module.
+fdtput -t s "$stage" "$keyboard" compatible samsung,np545xla-eckb
 mv "$stage" "$output"

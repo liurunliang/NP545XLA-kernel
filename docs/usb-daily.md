@@ -4,12 +4,14 @@
 
 ## 生成设备树与菜单
 
-在制作原镜像的 Debian ARM64 环境运行。以下命令使用原 Debian 镜像清单及其 FAT 启动分区里的 `/boot/debian-samsung.dtb`。从同一介质提取这个文件，先与清单的 SHA-256 核对。按[无线驱动构建说明](debian-wifi.md)生成对应内核的模块包和无线设备树片段。
+在制作原镜像的 Debian ARM64 环境运行。以下命令使用原 Debian 镜像清单及其 FAT 启动分区里的 `/boot/debian-samsung.dtb`。从同一介质提取这个文件，先与清单的 SHA-256 核对。使用 `--port0-x1` 构建对应内核的无线模块包和设备树片段。示例假设无线产物位于 `output/daily/wifi`。[无线驱动构建说明](debian-wifi.md)
 
 ```sh
+work=/var/tmp/np545xla-diag
+src/build-debian-eckb.sh "$work/linux-7.0" "$work/obj" "$work/artifacts" output/daily/eckb
 src/build-debian-touchpad-probe-dtb.sh debian-samsung.dtb touchpad.dtb
 fdtoverlay -i touchpad.dtb -o pci0.dtb output/daily/wifi/sc8180xp-np545xla-wifi.dtbo
-src/build-debian-wifi-phy-dtb.sh pci0.dtb daily.dtb
+src/build-debian-wifi-phy-dtb.sh --port0-x1 pci0.dtb daily.dtb
 src/build-daily-efi.sh output/debian-final/manifest.txt BOOTAA64.EFI
 ```
 
@@ -17,13 +19,20 @@ Windows 枚举把 `SSTP0001` 下的子设备标为 Samsung TPD 和 HID 鼠标。
 
 固件为触控板提供的虚拟中断脚是 448。按 Qualcomm 公开的 WoA 映射，448 / 64 取 GIO0 的第 7 项（从 0 开始），得到 GSI 590。减 32 得 SPI 558，对照本 SoC 的 PDC 范围得到 PDC 78，再查 SC8180x 的 wakeirq_map 得到 GPIO104。独立对照用合盖信号，其虚拟脚 320 映射为 GPIO50，与 DSDT 里读取盖子状态的 LIDR 一致。[Qualcomm 工程师的映射算法](https://marc.info/?l=devicetree&m=178272904036845&w=3) · [Linux v7.0 SC8180x 引脚表](https://github.com/torvalds/linux/blob/v7.0/drivers/pinctrl/qcom/pinctrl-sc8180x.c)
 
-同一算法把键盘 ECKB 的虚拟脚 640 映射为 GPIO125（第 10 项，GSI 605、SPI 573、PDC 93）。日用设备树将键盘中断设为 GPIO125、低电平触发、上拉。原来使用 GPIO91 的日用入口在一次实机启动中出现了两次 `a80000.i2c: Bus arbitration lost, clock line undriveable`，键盘未绑定；该阶段驱动正在探测 I²C 设备，尚未注册键盘中断。后续验收须分别确认 `a80000.i2c` 上地址 0x05 能绑定、GPIO125 在按键时产生中断，并且桌面收到键盘输入。[Linux v7.0 HID 探测顺序](https://github.com/torvalds/linux/blob/v7.0/drivers/hid/i2c-hid/i2c-hid-core.c)
+### 内置键盘
+
+键盘 ECKB 的虚拟脚 640 映射为 GPIO125（GSI 605、SPI 573、PDC 93），日用设备树配置低电平中断和上拉。实机在启动时和进入桌面后均出现过相同故障。Linux v7.0 的通用驱动先在地址 `0x05` 做一次无寄存器的单字节读，两次尝试均报告 `clock line undriveable`。同一启动直接成对发送寄存器 `0x0020` 并读取 30 字节，得到有效键盘描述符 `0CF2:9028`。[Linux v7.0 探测代码](https://github.com/torvalds/linux/blob/v7.0/drivers/hid/i2c-hid/i2c-hid-core.c)
+
+键盘模块直接读取描述符，核对长度、HID 版本和厂商产品编号，再沿用原驱动的复位、中断和输入报告处理。日用设备树的 `samsung,np545xla-eckb` 让 udev 在启动时加载它。驱动要求本机型号、`a80000.i2c/keyboard@5` 和 GPIO125 匹配。使用之前的 GPIO125 日用树可手动执行 `sudo modprobe np545_eckb existing_dt=1`。[板级驱动修改](../patches/linux-7.0-np545xla-eckb.patch)
+
+在已启动的 Xfce 实机热加载后，内核注册了 `0CF2:9028 Keyboard`。30 秒空闲抽样中 GPIO125 保持 128 次，键盘传输错误为零，整机 CPU 空闲及 I/O 等待合计 99.2%。
 
 ## 安装与回退
 
-在三星现有 USB Debian 上，安装 `grub-common`、`device-tree-compiler`、无线模块包和所需固件。把清单、日用 DTB、EFI 程序及安装脚本复制到 U 盘上的家目录，然后执行：
+在三星现有 USB Debian 上安装 `grub-common`、`device-tree-compiler` 和两个本地驱动包。`7.0.0-3` 无线包提供单通道 PCIe0 PHY 驱动。把本地包、清单、日用 DTB、EFI 程序及安装脚本放到 U 盘上的家目录，运行以下命令。无线固件及监管数据库的设置见[无线驱动说明](debian-wifi.md)。
 
 ```sh
+sudo apt install grub-common device-tree-compiler ./np545xla-wifi-modules_7.0.0-3_arm64.deb ./np545xla-eckb_7.0.0-1_arm64.deb
 sudo bash install-daily-boot.sh manifest.txt daily.dtb BOOTAA64.EFI
 ```
 

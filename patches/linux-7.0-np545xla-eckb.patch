@@ -1,0 +1,222 @@
+--- a/i2c-hid-core.c
++++ b/i2c-hid-core.c
+@@ -171,24 +171,6 @@
+ 			quirks = i2c_hid_quirks[n].quirks;
+ 
+ 	return quirks;
+-}
+-
+-static int i2c_hid_probe_address(struct i2c_hid *ihid)
+-{
+-	int ret;
+-
+-	/*
+-	 * Some STM-based devices need 400µs after a rising clock edge to wake
+-	 * from deep sleep, in which case the first read will fail. Try after a
+-	 * short sleep to see if the device came alive on the bus. Certain
+-	 * Weida Tech devices also need this.
+-	 */
+-	ret = i2c_smbus_read_byte(ihid->client);
+-	if (ret < 0) {
+-		usleep_range(400, 500);
+-		ret = i2c_smbus_read_byte(ihid->client);
+-	}
+-	return ret < 0 ? ret : 0;
+ }
+ 
+ static int i2c_hid_xfer(struct i2c_hid *ihid,
+@@ -1043,12 +1025,7 @@
+ 	struct hid_device *hid = ihid->hid;
+ 	int ret;
+ 
+-	ret = i2c_hid_probe_address(ihid);
+-	if (ret < 0) {
+-		i2c_hid_dbg(ihid, "nothing at this address: %d\n", ret);
+-		return -ENXIO;
+-	}
+-
++	/* ECKB accepts register reads but rejects a bare one-byte read on GENI. */
+ 	ret = i2c_hid_fetch_hid_descriptor(ihid);
+ 	if (ret < 0) {
+ 		dev_err(&client->dev,
+@@ -1059,6 +1036,11 @@
+ 	hid->version = le16_to_cpu(ihid->hdesc.bcdVersion);
+ 	hid->vendor = le16_to_cpu(ihid->hdesc.wVendorID);
+ 	hid->product = le16_to_cpu(ihid->hdesc.wProductID);
++
++	if (hid->vendor != 0x0cf2 || hid->product != 0x9028)
++		return dev_err_probe(&client->dev, -ENODEV,
++				     "unexpected HID identity %04x:%04x\n",
++				     hid->vendor, hid->product);
+ 
+ 	hid->initial_quirks |= i2c_hid_get_dmi_quirks(hid->vendor,
+ 						      hid->product);
+@@ -1320,7 +1302,6 @@
+ 
+ 	return ret;
+ }
+-EXPORT_SYMBOL_GPL(i2c_hid_core_probe);
+ 
+ void i2c_hid_core_remove(struct i2c_client *client)
+ {
+@@ -1344,7 +1325,6 @@
+ 	if (ihid->bufsize)
+ 		i2c_hid_free_buffers(ihid);
+ }
+-EXPORT_SYMBOL_GPL(i2c_hid_core_remove);
+ 
+ void i2c_hid_core_shutdown(struct i2c_client *client)
+ {
+@@ -1355,7 +1335,6 @@
+ 
+ 	i2c_hid_core_shutdown_tail(ihid);
+ }
+-EXPORT_SYMBOL_GPL(i2c_hid_core_shutdown);
+ 
+ static int i2c_hid_core_pm_suspend(struct device *dev)
+ {
+@@ -1400,7 +1379,6 @@
+ 	.poweroff = pm_sleep_ptr(i2c_hid_core_pm_suspend),
+ 	.restore = pm_sleep_ptr(i2c_hid_core_pm_restore),
+ };
+-EXPORT_SYMBOL_GPL(i2c_hid_core_pm);
+ 
+ MODULE_DESCRIPTION("HID over I2C core driver");
+ MODULE_AUTHOR("Benjamin Tissoires <benjamin.tissoires@gmail.com>");
+--- a/i2c-hid-of.c
++++ b/i2c-hid-of.c
+@@ -27,6 +27,7 @@
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/of_irq.h>
+ #include <linux/pm.h>
+ #include <linux/regulator/consumer.h>
+ 
+@@ -74,6 +75,38 @@
+ 			       ihid_of->supplies);
+ }
+ 
++/* Manual opt-in also accepts the older daily DT with the verified IRQ. */
++static bool existing_dt;
++module_param(existing_dt, bool, 0444);
++MODULE_PARM_DESC(existing_dt, "Allow the NP545XLA daily keyboard DT without its specific compatible");
++
++static bool np545_eckb_matches(struct i2c_client *client)
++{
++	struct device_node *node = client->dev.of_node;
++	struct device_node *keyboard;
++	struct of_phandle_args irq;
++	bool matches;
++
++	if (!of_machine_is_compatible("samsung,np545xla") || !node ||
++	    client->addr != 0x05)
++		return false;
++	if (!of_device_is_compatible(node, "samsung,np545xla-eckb") &&
++	    !(existing_dt && of_device_is_compatible(node, "hid-over-i2c")))
++		return false;
++
++	keyboard = of_find_node_by_path("/soc@0/geniqup@ac0000/i2c@a80000/keyboard@5");
++	matches = keyboard == node;
++	of_node_put(keyboard);
++	if (!matches || of_irq_parse_one(node, 0, &irq))
++		return false;
++
++	matches = of_device_is_compatible(irq.np, "qcom,sc8180x-tlmm") &&
++		  irq.args_count == 2 && irq.args[0] == 125 &&
++		  irq.args[1] == IRQ_TYPE_LEVEL_LOW;
++	of_node_put(irq.np);
++	return matches;
++}
++
+ static int i2c_hid_of_probe(struct i2c_client *client)
+ {
+ 	struct device *dev = &client->dev;
+@@ -83,6 +116,9 @@
+ 	int ret;
+ 	u32 val;
+ 
++	if (!np545_eckb_matches(client))
++		return -ENODEV;
++
+ 	ihid_of = devm_kzalloc(dev, sizeof(*ihid_of), GFP_KERNEL);
+ 	if (!ihid_of)
+ 		return -ENOMEM;
+@@ -96,7 +132,7 @@
+ 		dev_err(dev, "HID register address not provided\n");
+ 		return -ENODEV;
+ 	}
+-	if (val >> 16) {
++	if (val != 0x20) {
+ 		dev_err(dev, "Bad HID register address: 0x%08x\n", val);
+ 		return -EINVAL;
+ 	}
+@@ -135,37 +171,46 @@
+ 				  hid_descriptor_address, quirks);
+ }
+ 
+-#ifdef CONFIG_OF
+-static const struct of_device_id i2c_hid_of_match[] = {
+-	{ .compatible = "hid-over-i2c" },
+-	{},
+-};
+-MODULE_DEVICE_TABLE(of, i2c_hid_of_match);
+-#endif
+-
+-static const struct i2c_device_id i2c_hid_of_id_table[] = {
+-	{ "hid" },
+-	{ "hid-over-i2c" },
+-	{ }
+-};
+-MODULE_DEVICE_TABLE(i2c, i2c_hid_of_id_table);
++static const struct of_device_id np545_eckb_match[] = {
++	{ .compatible = "samsung,np545xla-eckb" },
++	{}
++};
++MODULE_DEVICE_TABLE(of, np545_eckb_match);
++
++/* No generic module alias: the existing DT requires an explicit opt-in. */
++static const struct of_device_id np545_eckb_existing_match[] = {
++	{ .compatible = "samsung,np545xla-eckb" },
++	{ .name = "keyboard", .compatible = "hid-over-i2c" },
++	{}
++};
+ 
+ static struct i2c_driver i2c_hid_of_driver = {
+ 	.driver = {
+-		.name	= "i2c_hid_of",
++		.name	= "np545_eckb",
+ 		.pm	= &i2c_hid_core_pm,
+ 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
+-		.of_match_table = of_match_ptr(i2c_hid_of_match),
++		.of_match_table = np545_eckb_match,
+ 	},
+ 
+ 	.probe		= i2c_hid_of_probe,
+ 	.remove		= i2c_hid_core_remove,
+ 	.shutdown	= i2c_hid_core_shutdown,
+-	.id_table	= i2c_hid_of_id_table,
+-};
+-
+-module_i2c_driver(i2c_hid_of_driver);
+-
+-MODULE_DESCRIPTION("HID over I2C OF driver");
++};
++
++static int __init np545_eckb_init(void)
++{
++	if (existing_dt)
++		i2c_hid_of_driver.driver.of_match_table = np545_eckb_existing_match;
++	return i2c_add_driver(&i2c_hid_of_driver);
++}
++module_init(np545_eckb_init);
++
++static void __exit np545_eckb_exit(void)
++{
++	i2c_del_driver(&i2c_hid_of_driver);
++}
++module_exit(np545_eckb_exit);
++
++MODULE_DESCRIPTION("Samsung NP545XLA ECKB HID-over-I2C transport");
+ MODULE_AUTHOR("Benjamin Tissoires <benjamin.tissoires@gmail.com>");
+ MODULE_LICENSE("GPL");
