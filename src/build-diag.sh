@@ -66,11 +66,13 @@ if [[ ! -d "$work/linux-7.0" ]]; then
 fi
 artifacts="$work/artifacts"
 "$repo/src/build-diag-kernel.sh" "$work/linux-7.0" "$work/obj" "$artifacts"
+"$repo/src/build-diag-display-modules.sh" "$work/linux-7.0" "$work/obj" "$artifacts"
 fetch https://deb.debian.org/debian/pool/non-free-firmware/f/firmware-nonfree/firmware-realtek_20250410-2_all.deb \
     "$work/firmware-realtek.deb" "$firmware_sha"
 dpkg-deb -x "$work/firmware-realtek.deb" "$stage/firmware"
 export RTL_FIRMWARE_DIR="$stage/firmware/usr/lib/firmware/rtl_nic"
-"$repo/src/build-diag-initramfs.sh" "$key" "$artifacts"
+DIAG_DISPLAY_MODULES="$artifacts/display-modules.tar.gz" \
+    "$repo/src/build-diag-initramfs.sh" "$key" "$artifacts"
 
 tree="$stage/media"
 mkdir -p "$tree/EFI/BOOT" "$tree/boot"
@@ -116,8 +118,8 @@ cmp "$tree/EFI/BOOT/BOOTAA64.EFI" "$stage/esp-readback.efi"
         echo "Firmware: firmware-realtek_20250410-2 ($firmware_sha)"
         echo "Public key: $(ssh-keygen -E sha256 -lf "$key" | awk '{print $2}')"
         echo "Bundle: $bundle"
-        dpkg-query -W busybox-static dropbear-bin grub-efi-arm64-bin xorriso gcc
-        (cd "$artifacts"; sha256sum Image samsung.dtb initramfs.cpio.gz kernel.config)
+        dpkg-query -W busybox-static dropbear-bin grub-efi-arm64-bin xorriso gcc kmod
+        (cd "$artifacts"; sha256sum Image samsung.dtb initramfs.cpio.gz kernel.config display-modules.tar.gz)
         cat "$name.sha256"
     } > manifest.txt
 )

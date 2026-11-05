@@ -43,7 +43,7 @@ printf '/bin/sh\n' > "$root/etc/shells"
 busybox_path=$(command -v busybox)
 cp -L "$busybox_path" "$root/bin/busybox"
 "$busybox_path" --list > "$work/applets"
-for applet in sh ash mount cat hostname dmesg mkdir grep awk tr cut readlink sleep head tail \
+for applet in sh ash mount cat hostname dmesg mkdir grep awk tr cut readlink sleep head tail modprobe wc \
     ip ifconfig udhcpc kill sed mv cp cmp ls sort date basename rm; do
     if ! grep -Fxq "$applet" "$work/applets"; then
         echo "Required busybox applet is missing: $applet" >&2
@@ -53,6 +53,14 @@ done
 while IFS= read -r applet; do
     [[ $applet == busybox ]] || ln -s busybox "$root/bin/$applet"
 done < "$work/applets"
+
+# The kernel build supplies the module dependency closure and BusyBox indexes.
+# Accept older standalone invocations without an explicit archive for baseline boots.
+if [[ -n ${DIAG_DISPLAY_MODULES:-} ]]; then
+    tar -xzf "$DIAG_DISPLAY_MODULES" -C "$root"
+    [[ -s "$root/lib/modules/7.0.0/modules.dep" && -s "$root/lib/modules/7.0.0/modules.alias" ]] ||
+        { echo "Display module archive lacks its Linux 7.0.0 indexes." >&2; exit 1; }
+fi
 
 # ldd resolves the interpreter and the complete dependency tree of each
 # distribution binary. Keep their guest paths even on a merged-/usr builder.

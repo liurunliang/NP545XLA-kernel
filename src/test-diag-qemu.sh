@@ -149,6 +149,8 @@ ssh "${ssh_opts[@]}" -i "$identity" root@127.0.0.1 \
     'test "$(id -u)" = 0 && test "$(uname -m)" = aarch64 && grep -Fq "Linux version" /run/diagnostics/boot-dmesg.txt && cat /run/diagnostics/report.txt' >"$report"
 grep -Fq "Firmware: ACPI" "$report" && grep -Fq "Disk mounts: none" "$report" ||
     die "the report lacks the ACPI or disk-mount confirmation"
+grep -Fxq 'Native display modules: not requested' "$report" ||
+    die "the default ACPI entry attempted to load the Samsung display modules"
 
 ssh-keygen -q -t ed25519 -N '' -f "$scratch/unrelated-key"
 if ssh "${ssh_opts[@]}" -o IdentityAgent=none -i "$scratch/unrelated-key" root@127.0.0.1 true \

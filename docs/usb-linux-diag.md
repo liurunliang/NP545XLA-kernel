@@ -45,30 +45,13 @@ src/test-diag-qemu.sh --image output/diag/np545xla-diag.img \
 1. 如果 Windows 启用了设备加密，先确认可取回 BitLocker 恢复密钥。也可用另一支 U 盘制作含系统文件的 Windows 恢复盘备用。[微软恢复驱动器说明](https://support.microsoft.com/en-us/windows/experience/backup-recovery/recovery-drive)
 2. Windows 上可用下方脚本核对指定 U 盘并校验写入。若从 Mac 写入，插拔目标 U 盘，对照两次 `diskutil list external physical` 的结果，用 `diskutil info /dev/diskN` 核对整盘型号、USB 接口与容量。在支持写后校验的镜像写盘工具中打开 `.img`、**手动选择该 U 盘**、写入并等待校验结束，再弹出。镜像会覆盖所选整盘。
 3. 在三星接上电源和启动 U 盘。要取报告，再接 Realtek RTL8153 USB 有线网卡和带 DHCP 的有线网络。程序识别产品 ID 为 `8153` 或 USB 产品名称带 `8153` 的适配器，通过 `r8152` 或 `cdc_ether` 驱动联网。使用 Windows 高级启动的“使用设备”或固件的一次性启动菜单，选择 UEFI USB。自建 GRUB 和内核未签名。若固件拒绝加载，确认恢复密钥可用后在固件中临时关闭 Secure Boot，并记录原设置。
-4. 第一次让菜单在 5 秒后进入默认 ACPI 项。记录最后一条可见提示、诊断页标明的 `Firmware` 和网卡状态。第二项是三星 DT 基线。如果内屏停留在 GRUB 文字，仍可从网口检查 Linux 是否已启动。第三项同样使用三星 DT，只额外传入 `pd_ignore_unused regulator_ignore_unused`，在此次启动中保留可能被内核判作未使用的电源域和稳压器。比较第二、三项时保持接线一致，分别记录物理屏幕的变化、SSH 是否可用和报告中的内核命令行。该对照项可能增加耗电。
+4. 默认项在 5 秒后用原厂 ACPI 启动。第二项用三星设备树和固件帧缓冲，可作为有线 SSH 的基线。**要验证内屏，请选第三项 `Samsung DT + native display`**。它保留实机试验中的电源域和稳压器设置，在内存中加载高通原生显示驱动，并报告内屏连接状态。若内屏变黑，保持网线连接，通过 SSH 取回本次报告。
 
 ### 判断停在哪一步
 
 菜单打印所选路径和读到文件的 GRUB 设备号。三星条目的 `DT accepted` 表示 GRUB 已读入设备树。`Linux accepted` 表示内核映像已读入，`initrd registered` 表示已登记为内核提供 initramfs 的接口，`before EFI boot` 位于执行 `boot` 之前。随后若出现 `Providing initrd via EFI_LOAD_FILE2_PROTOCOL`，Linux EFI stub 已开始执行并向 GRUB 请求 initramfs。ACPI 项额外开启 EFI 调试和 `earlycon=efifb`，早期内核输出需要可用的 EFI 帧缓冲。遇到 `GRUB STOP` 时拍下错误文字，然后重启。
 
-### 在旧版诊断盘单次试验
-
-旧菜单已有三星 DT 项时，可选中它按 **e**，找到 `if linux /boot/Image acpi=off ...` 那一行，在 `/boot/Image` 和 `acpi=off` 之间插入 `pd_ignore_unused regulator_ignore_unused `（末尾留一个空格），按 **Ctrl+X** 启动。再次开机即可选回基线。
-
-要在旧盘使用完整的新菜单，可在另一支 FAT 盘根目录放入 `diag.cfg`。把旧盘构建时的 `manifest.txt` 和本仓库的 `src/diag-grub.cfg` 放在构建机上，按旧盘的 bundle ID 生成该文件。
-
-```sh
-bundle=$(awk '/^Bundle: / {print $2}' /path/to/old/manifest.txt)
-printf '%s\n' "$bundle" | grep -Eq '^[0-9a-f]{16}$' &&
-    sed "s/@BUNDLE@/$bundle/g" src/diag-grub.cfg > /path/to/second-fat/diag.cfg
-```
-
-保留旧诊断盘，接上菜单所在的 FAT 盘，从旧 GRUB 按 **c**，逐行执行下面两条命令。新菜单将在选择条目时按 bundle ID 找回旧盘内核、设备树和 initramfs。这种用法仅更新启动菜单。
-
-```grub
-search --file --set=cfgdev /diag.cfg
-configfile ($cfgdev)/diag.cfg
-```
+旧版 U 盘的第三项若显示 `keep power for display test`，该镜像只做保电对照。使用原生显示入口需要包含驱动模块的新镜像。
 
 ### 从 Windows 写入指定 U 盘
 

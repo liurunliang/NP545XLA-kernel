@@ -14,6 +14,13 @@ dmesg > "$snapshot" 2>&1
     [ ! -r /sys/firmware/devicetree/base/compatible ] || tr '\000' '\n' < /sys/firmware/devicetree/base/compatible
     ls /sys/firmware/acpi/tables 2>/dev/null
     echo
+    echo '--- Framebuffers and native display module results ---'
+    cat /proc/fb
+    if [ -f "$out/display-modules.log" ]; then
+        cat "$out/display-modules.log"
+    else
+        echo 'Native display modules: not requested'
+    fi
     echo '--- USB devices: topology, ID, product, driver ---'
     for usb in /sys/bus/usb/devices/*; do
         [ -r "$usb/idVendor" ] || continue

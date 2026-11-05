@@ -33,6 +33,7 @@ if grep -iq '^QEMU' /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name 
 fi
 boot_id=$(cat /proc/sys/kernel/random/boot_id)
 entry=$(tr ' ' '\n' </proc/cmdline | sed -n 's/^diag\.mode=//p' | tail -1)
+display_profile=$(tr ' ' '\n' </proc/cmdline | sed -n 's/^diag\.display=//p' | tail -1)
 dmesg -n 3
 
 # Give each boot a fresh host identity. Entropy or daemon startup must never
@@ -43,6 +44,47 @@ dmesg -n 3
     dropbearkey -y -f "$key" | awk '/^Fingerprint: / { print $2 }' > "$log/fingerprint" &&
     exec dropbear -F -E -s -j -k -p 2222 -r "$key" -P /run/diag-dropbear.pid
 ) >> "$log/ssh.log" 2>&1 &
+
+load_display_module() {
+    echo "modprobe $*"
+    modprobe "$@"
+    echo "modprobe $1 rc=$?"
+}
+
+native_display_status() {
+    echo 'Display: native'
+    framebuffers=$(cat /proc/fb)
+    printf 'Framebuffer: %s\n' "${framebuffers:-none}"
+    found=false
+    for edp in /sys/class/drm/card*-eDP-*; do
+        [ -r "$edp/status" ] || continue
+        found=true
+        state=$(cat "$edp/status")
+        modes=
+        bytes=0
+        [ ! -r "$edp/modes" ] || modes=$(tr '\n' ' ' < "$edp/modes")
+        [ ! -r "$edp/edid" ] || bytes=$(wc -c < "$edp/edid")
+        printf 'eDP: %s %s, modes: %s, EDID: %s bytes\n' "${edp##*/}" "$state" "${modes% }" "$bytes"
+    done
+    "$found" || echo 'eDP: none'
+}
+
+native_display=false
+if [ "$entry/$firmware/$display_profile" = dt/DT/native ]; then
+    native_display=true
+    (
+        load_display_module phy_qcom_edp
+        load_display_module panel_edp
+        load_display_module msm separate_gpu_kms=1
+        # Component probes can finish after modprobe returns. Read DRM sysfs
+        # off the network/status loop in case a connector operation stalls.
+        while :; do
+            native_display_status > "$log/display-next"
+            mv "$log/display-next" "$log/display-status"
+            sleep 3
+        done
+    ) >> "$log/display-modules.log" 2>&1 &
+fi
 
 is_rtl8153() {
     [ -r "$1/idProduct" ] || return 1
@@ -147,6 +189,8 @@ iface=
 ifindex=
 dhcp_pid=
 tick=0
+draw_pending=false
+draw_pid=
 while :; do
     new_iface=$(find_nic)
     new_index=
@@ -187,6 +231,13 @@ while :; do
         echo "Boot: $boot_id"
         echo "Entry: ${entry:-unspecified}"
         echo "Firmware: $firmware"
+        if "$native_display"; then
+            if [ -f "$log/display-status" ]; then
+                cat "$log/display-status"
+            else
+                echo 'Display: loading native modules'
+            fi
+        fi
         if [ "$firmware" = DT ]; then
             echo "RSC: $(platform_state 18200000) / apps SMMU: $(platform_state 15000000) / GPU SMMU: $(platform_state 2ca0000) / UFS controller: $(platform_state 1d84000)"
         fi
@@ -224,12 +275,19 @@ while :; do
     } > "$log/next"
     if ! cmp -s "$log/next" "$log/status"; then
         mv "$log/next" "$log/status"
-        display
+        if "$native_display"; then draw_pending=true; else display; fi
         diag-report
         tick=0
     elif [ "$tick" -ge 5 ]; then
         diag-report
         tick=0
+    fi
+    # fbcon writes can wait for a modeset. Keep DHCP, reports and subsequent
+    # device discovery running, with at most one console writer at a time.
+    if "$draw_pending" && { [ -z "$draw_pid" ] || ! kill -0 "$draw_pid" 2>/dev/null; }; then
+        display &
+        draw_pid=$!
+        draw_pending=false
     fi
     tick=$((tick + 1))
     sleep 3
