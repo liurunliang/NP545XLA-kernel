@@ -1,6 +1,6 @@
 # NP545XLA Kernel
 
-> ⚠️ **Work in progress.** This kernel does not yet produce a fully booting system. We're actively working through the SC8180XP driver bring-up. If you have the same hardware or want to help, please [open an issue](https://github.com/potassium-os/NP545XLA-kernel/issues) — we'd love to hear from you.
+> **Hardware status, 2026-11-05.** The diagnostic USB boots Linux 7.0 on the NP545XLA-KA1TT using the Samsung device tree. Wired SSH over an RTL8153 adapter works. The internal screen can go dark after the boot messages. The Ubuntu live image is still in development. [Build instructions and hardware results](docs/usb-linux-diag.md)
 
 Custom Linux kernel + boot ISO for the Samsung Galaxy Book Go 5G (SC8180XP).
 

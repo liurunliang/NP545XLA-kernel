@@ -3,7 +3,8 @@
 ## The Situation
 
 - **SoC:** Qualcomm Snapdragon 8cx Gen 2 (SC8180XP)
-- **Current state:** Boots to initramfs, but deferred probe cascade blocks USB/UFS/keyboard — stuck at "Unable to find a medium containing a live system" (last updated 2026-05-23)
+- **Diagnostic USB, 2026-11-05.** A real NP545XLA-KA1TT booted Linux 7.0 with the Samsung device tree. Wired SSH over the RTL8153 and enumeration of the internal UFS were verified. See the [diagnostic image and display results](usb-linux-diag.md).
+- **Ubuntu live image, 2026-05-23.** The initramfs stopped at "Unable to find a medium containing a live system". The sections below describe that earlier image.
 - **Target:** Ubuntu 26.04 LTS (kernel 6.14 base)
 
 SC8180XP is the **only** 8cx generation without mainline kernel support:
