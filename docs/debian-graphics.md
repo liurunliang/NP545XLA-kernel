@@ -1,6 +1,6 @@
 # NP545XLA 上的 X11、Wayland 与 Adreno
 
-## 当前 X11 桌面
+## 原日用入口的 X11 桌面
 
 2026-11-05，三星 USB Debian 的 Xfce/LightDM 会话使用 X11，MSM KMS 驱动负责内屏扫描输出。实机同时提供独立的 Adreno 渲染设备。该次启动的节点如下，编号可能随启动顺序变化。
 
@@ -26,6 +26,12 @@
 同一隔离会话中的 `es2gears_wayland` 在首次提交表面前崩溃。成功的画帧证据来自独立的 `weston-simple-egl`。该程序从 Debian 官方 Weston 14.0.2-1 包临时提取，测试后已清理。Debian 的 `cage` 与 `wayland-utils` 保留作复查，本次无推荐依赖安装共下载 1.5 MB、占用约 4.7 MB。结束后已核对 Cage 退出、LightDM 和 Xfce/X11 活跃、eDP 仍已连接。现场日志位于本地 `output/daily/wayland/`。
 
 以上覆盖 X11 软件渲染与原生 Wayland 客户端的离屏软件合成。Wayland 合成器独占内屏进行 KMS 扫描输出、跨卡传递渲染缓冲区、Adreno 硬件加速，以及真实 Wayland 座席上的输入仍待验证。
+
+## 三星实机的 Adreno 硬件绘制
+
+2026-11-05，在保留日用 Xfce 的分卡模式下，在一次测试期间将内核固件搜索路径指向 USB 根盘上的专用目录。驱动加载 SQE 和 GMU 固件，GMU 报告版本 2.0.261。MSM 查询返回当前驱动配置的 GPU ID 680、芯片 ID `0x06080001` 和 2 MiB GMEM。随后直接在指定渲染节点运行 GLES 着色器。Mesa 报告 `FD680`，EGL 设备号与 `/dev/dri/renderD128` 的设备号匹配，内核 DRM 驱动为 `msm`。三帧图案每帧 1024 个 RGBA 像素全部匹配。退出后已恢复日用的固件搜索路径，LightDM 保持运行。[固件来源](debian-gpu-firmware.md) · [绘制与校验程序](../src/probe-debian-gpu.c)
+
+在同次启动中，独立的 Cage/Wayland 合成器打开了该渲染节点。原生 Wayland 客户端再次报告 `FD680`，三个窗口缓冲区均通过像素校验并收到帧回调，输出为虚拟屏。在原日用 X11 服务器上，指定 GPU 后客户端仍报告 `llvmpipe`，硬件测试按预期判为失败。上述原始记录在 `output/adreno/` 的 `first-open.txt`、`node-hardware.txt`、`wayland-headless-hardware.txt` 和 `x11-split-hardware.txt`。
 
 ## 输入路径
 
