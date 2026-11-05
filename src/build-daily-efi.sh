@@ -18,7 +18,7 @@ menuentry 'Debian 13 - daily desktop (Samsung)' --id daily {
     # directory also exists on ISO9660, so the usual marker is ambiguous here.
     if search --no-floppy --file --set=root /boot/daily-@BUNDLE@.dtb; then
         if devicetree /boot/daily-@BUNDLE@.dtb; then
-            debian_boot acpi=off efi=novamap clk_ignore_unused pd_ignore_unused regulator_ignore_unused console=ttyMSM0,115200 console=tty0 loglevel=3 diag.mode=dt diag.display=native np545.daily=1
+            debian_boot acpi=off efi=novamap clk_ignore_unused pd_ignore_unused regulator_ignore_unused console=ttyMSM0,115200 console=tty0 loglevel=3 log_buf_len=16M diag.mode=dt diag.display=native np545.daily=1
         fi
     fi
     diag_stop 'Daily DT unavailable. Restart and select the original Debian entry.'

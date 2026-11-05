@@ -28,6 +28,16 @@ sudo bash install-daily-boot.sh manifest.txt daily.dtb BOOTAA64.EFI
 
 如需完整恢复旧菜单，可在第四项 Debian 中重新核对 USB 根与同盘 EFI 分区，并用保留的 `BOOTAA64.EFI.baseline` 替换该分区上的 `BOOTAA64.EFI`。原始整盘镜像则保存在 Mac。
 
+## 启动探测日志
+
+这台机器的键盘异常报告可在一秒内覆盖原来的内核缓冲区。日用入口将缓冲区设为 16 MiB。在三星 Debian 上安装限时记录服务并启用，下一次该入口开机时，前三分钟的驱动探测信息会保存到内存中的 `/run/np545xla-daily-probe.log`。
+
+```sh
+sudo install -m 644 src/debian-rootfs/np545xla-daily-probe.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable np545xla-daily-probe.service
+```
+
 ## 桌面
 
 将整个 `src/debian-desktop/` 目录复制到三星 Debian，运行 `sudo bash debian-desktop/provision`。Xfce 通过 LightDM 正常登录。如果还没有本机密码，请从自己的 Mac SSH 终端执行 `sudo passwd liurunliang`。无线凭据可在桌面右上角的网络菜单中输入。安装时保留有线 SSH，网络管理器只配置 Wi-Fi。

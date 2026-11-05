@@ -1,0 +1,16 @@
+[Unit]
+Description=Capture first-boot wireless and input probe messages
+ConditionKernelCommandLine=np545.daily=1
+After=local-fs.target
+
+[Service]
+Type=exec
+# The built-in keyboard can emit over 2000 incomplete packets per second.
+# Filter before storage and stop once early driver probes have settled.
+ExecStart=/bin/bash -c "/usr/bin/timeout 180 /usr/bin/dmesg --follow --color=never | /usr/bin/awk '/incomplete report/ { next } /[Pp][Cc][Ii]|ath11k|firmware|[Mm][Hh][Ii]|regulat|supply|[Ii]2[Cc]|[Hh][Ii][Dd]|gpio|pinctrl|geni/ { print; fflush() }'"
+StandardOutput=truncate:/run/np545xla-daily-probe.log
+UMask=0077
+LimitFSIZE=8M
+
+[Install]
+WantedBy=multi-user.target
