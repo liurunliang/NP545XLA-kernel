@@ -1,0 +1,11 @@
+[Unit]
+Description=Show wired SSH login information on the console
+After=systemd-networkd.service np545xla-ssh-hostkeys.service
+
+[Service]
+ExecStart=/usr/local/sbin/np545xla-login-status
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

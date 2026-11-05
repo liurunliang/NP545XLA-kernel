@@ -1,0 +1,35 @@
+#!/bin/sh
+# Refresh the pre-login banner when a wired address or host fingerprint changes.
+# agetty --reload leaves active login sessions alone.
+set -eu
+dir=/run/np545xla
+issue=/run/issue.d/40-np545xla.issue
+mkdir -p "$dir" /run/issue.d
+serial=false
+if grep -iq '^QEMU' /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name 2>/dev/null; then
+    [ ! -c /dev/ttyAMA0 ] || serial=true
+fi
+while :; do
+    addresses=$(ip -o -4 addr show scope global | awk '{split($4, a, "/"); print a[1]}')
+    key=/etc/ssh/ssh_host_ed25519_key.pub
+    fingerprint=
+    if [ -s "$key" ]; then
+        fingerprint=$(ssh-keygen -E sha256 -lf "$key" | awk '{print $2}')
+    fi
+    {
+        echo 'Samsung NP545XLA  |  Debian 13 ARM64'
+        if [ -n "$addresses" ]; then
+            for addr in $addresses; do echo "SSH: ssh -p 2223 liurunliang@$addr"; done
+        else
+            echo 'Network: waiting for a wired DHCP lease'
+        fi
+        echo "Host key: ${fingerprint:-initializing}"
+        echo 'Sign in with your SSH public key. Set a console password with sudo passwd liurunliang.'
+    } > "$dir/banner.new"
+    if ! cmp -s "$dir/banner.new" "$issue"; then
+        mv "$dir/banner.new" "$issue"
+        agetty --reload || :
+        if "$serial"; then cat "$issue" > /dev/ttyAMA0; fi
+    fi
+    sleep 3
+done

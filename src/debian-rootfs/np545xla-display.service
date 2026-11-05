@@ -1,0 +1,15 @@
+[Unit]
+Description=Samsung Galaxy Book Go native eDP display
+ConditionPathExists=/sys/bus/platform/devices/ae00000.display-subsystem
+After=systemd-modules-load.service systemd-udev-trigger.service
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/modprobe phy_qcom_edp
+ExecStart=/usr/sbin/modprobe panel_edp
+ExecStart=/usr/sbin/modprobe msm
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

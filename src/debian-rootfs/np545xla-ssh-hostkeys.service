@@ -1,0 +1,12 @@
+[Unit]
+Description=Initialize persistent SSH server identity
+After=local-fs.target
+Before=ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
