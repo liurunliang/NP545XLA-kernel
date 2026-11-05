@@ -47,12 +47,6 @@
 			linux,code = <SW_LID>;
 			wakeup-source;
 		};
-
-		power-key {
-			gpios = <&pmc8180_pwrkey 0 GPIO_ACTIVE_LOW>;
-			linux,code = <KEY_POWER>;
-			wakeup-source;
-		};
 	};
 
 	reserved-memory {
