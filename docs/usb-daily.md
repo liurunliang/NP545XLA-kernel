@@ -27,12 +27,14 @@ Windows 枚举把 `SSTP0001` 下的子设备标为 Samsung TPD 和 HID 鼠标。
 
 在已启动的 Xfce 实机热加载后，内核注册了 `0CF2:9028 Keyboard`。30 秒空闲抽样中 GPIO125 保持 128 次，键盘传输错误为零，整机 CPU 空闲及 I/O 等待合计 99.2%。
 
+在日用设备树冷启动后，内核自动加载模块并注册了键盘。udev 还把主键盘识别成绘图板按钮，Xorg 将它分配给指针。键盘包 `7.0.0-3` 随附 udev 规则，在该键盘的 `inputN` 父节点及事件节点上移除两项绘图板标签。现场复核中 `libinput list-devices` 将其列为 `keyboard pointer`，Xorg 为同一设备注册了 `KEYBOARD`。该规则位于 X11 和 Wayland 共用的输入层；本次图形会话实测使用 Xfce/X11。
+
 ## 安装与回退
 
 在三星现有 USB Debian 上安装 `grub-common`、`device-tree-compiler` 和两个本地驱动包。`7.0.0-3` 无线包提供单通道 PCIe0 PHY 驱动。把本地包、清单、日用 DTB、EFI 程序及安装脚本放到 U 盘上的家目录，运行以下命令。无线固件及监管数据库的设置见[无线驱动说明](debian-wifi.md)。
 
 ```sh
-sudo apt install grub-common device-tree-compiler ./np545xla-wifi-modules_7.0.0-3_arm64.deb ./np545xla-eckb_7.0.0-1_arm64.deb
+sudo apt install grub-common device-tree-compiler ./np545xla-wifi-modules_7.0.0-3_arm64.deb ./np545xla-eckb_7.0.0-3_arm64.deb
 sudo bash install-daily-boot.sh manifest.txt daily.dtb BOOTAA64.EFI
 ```
 

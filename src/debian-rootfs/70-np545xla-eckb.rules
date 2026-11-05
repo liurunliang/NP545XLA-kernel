@@ -1,0 +1,4 @@
+# ECKB advertises tablet buttons alongside its keyboard usages. Keep the main
+# keyboard collection on the keyboard path. libinput also consults its inputN
+# parent, so clear both tablet tags on the parent and the event node.
+ACTION!="remove", SUBSYSTEM=="input", ENV{ID_PATH}=="platform-a80000.i2c", ATTRS{name}=="* 0CF2:9028 Keyboard", ENV{ID_INPUT_KEYBOARD}=="1", ENV{ID_INPUT_TABLET}="", ENV{ID_INPUT_TABLET_PAD}=""

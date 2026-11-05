@@ -56,9 +56,11 @@ fi
 
 pkg=$stage/pkg
 name=np545xla-eckb
-version=$release-1
+version=$release-3
 mkdir -p "$pkg/DEBIAN"
 install -D -m 644 "$module" "$pkg/usr/lib/modules/$release/extra/np545_eckb.ko"
+install -D -m 644 "$repo/src/debian-rootfs/70-np545xla-eckb.rules" \
+    "$pkg/usr/lib/udev/rules.d/70-np545xla-eckb.rules"
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: $name
 Version: $version
