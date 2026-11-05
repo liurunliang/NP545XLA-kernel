@@ -18,6 +18,7 @@
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
 #include <X11/Xutil.h>
+#include <X11/Xproto.h>
 #include <ctype.h>
 #include <fcntl.h>
 #include <gbm.h>
@@ -118,8 +119,8 @@ static GLint setup_pattern(void)
     glAttachShader(prog, compile_shader(GL_VERTEX_SHADER,
         "attribute vec2 pt; void main(){gl_Position=vec4(pt,0.,1.);}"));
     glAttachShader(prog, compile_shader(GL_FRAGMENT_SHADER,
-        "precision mediump float; uniform float turn;"
-        "void main(){float right=step(16.,gl_FragCoord.x);"
+        "precision highp float; uniform float turn;"
+        "void main(){float right=step(16.,mod(gl_FragCoord.x,32.));"
         "gl_FragColor=vec4(1.-right,right,turn,1.);}"));
     glBindAttribLocation(prog, 0, "pt");
     glLinkProgram(prog);
@@ -130,21 +131,24 @@ static GLint setup_pattern(void)
     glUseProgram(prog);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, triangle);
     glEnableVertexAttribArray(0);
-    glViewport(0, 0, 32, 32);
     glDisable(GL_DITHER);
     return glGetUniformLocation(prog, "turn");
 }
 
-static void render_frame(GLint uniform, int frame)
+static void render_frame(GLint uniform, int frame, int width, int height)
 {
+    if (width < 32 || height < 32)
+        fail("drawable is smaller than the 32x32 sample");
+    int sample_x = (width - 32) / 2;
+    glViewport(0, 0, width, height);
     glUniform1f(uniform, frame % 2);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     GLubyte pixels[32 * 32 * 4];
-    glReadPixels(0, 0, 32, 32, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glReadPixels(sample_x, (height - 32) / 2, 32, 32, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     if (glGetError() != GL_NO_ERROR)
         fail("GLES drawing or readback failed");
     for (unsigned i = 0; i < 32 * 32; ++i) {
-        bool right = (i % 32) >= 16;
+        bool right = ((sample_x + i) % 32) >= 16;
         const GLubyte expected[] = {right ? 0 : 255, right ? 255 : 0,
                                     frame % 2 ? 255 : 0, 255};
         if (memcmp(pixels + 4 * i, expected, 4) != 0)
@@ -193,7 +197,7 @@ static void probe_offscreen(const char *target)
         fail("offscreen framebuffer incomplete");
     GLint uniform = setup_pattern();
     for (int i = 0; i < 3; ++i)
-        render_frame(uniform, i);
+        render_frame(uniform, i, 32, 32);
     eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglDestroyContext(dpy, ctx);
     eglTerminate(dpy);
@@ -208,28 +212,73 @@ static void frame_done(void *data, struct wl_callback *callback, uint32_t time)
     wl_callback_destroy(callback);
 }
 
-/* Read a strip of our own window after the swap. Present may complete after
- * XSync, and the blue component alternates to distinguish successive frames. */
+/* The X server acknowledges MapWindow before the window manager reparents
+ * and maps the client. GetImage also requires the requested area to be on the
+ * screen. Use coordinates within both the current drawable and its root. */
+static bool x11_sample(struct waffle_x11_egl_window *window, int *x, int *y)
+{
+    Display *dpy = window->display.xlib_display;
+    XWindowAttributes attr;
+    Window child;
+    int root_x, root_y;
+    if (!XGetWindowAttributes(dpy, window->xlib_window, &attr) ||
+        attr.map_state != IsViewable ||
+        !XTranslateCoordinates(dpy, window->xlib_window, attr.root, 0, 0,
+                               &root_x, &root_y, &child))
+        return false;
+    int left = root_x < 0 ? -root_x : 0;
+    int top = root_y < 0 ? -root_y : 0;
+    int right = WidthOfScreen(attr.screen) - root_x;
+    int bottom = HeightOfScreen(attr.screen) - root_y;
+    if (right > attr.width) right = attr.width;
+    if (bottom > attr.height) bottom = attr.height;
+    if (right - left < 32 || bottom - top < 1) return false;
+    *x = left + (right - left - 32) / 2;
+    *y = top + (bottom - top - 1) / 2;
+    return true;
+}
+
+static XErrorHandler saved_xerror;
+static Display *read_display;
+
+static int trap_image_error(Display *dpy, XErrorEvent *event)
+{
+    if (dpy == read_display && event->request_code == X_GetImage &&
+        event->error_code == BadMatch)
+        return 0;
+    return saved_xerror(dpy, event);
+}
+
 static void verify_x11_window(struct waffle_x11_egl_window *window, int frame)
 {
     Display *dpy = window->display.xlib_display;
-    for (int retry = 0; retry < 50; ++retry) {
-        XImage *image = XGetImage(dpy, window->xlib_window, 0, 12, 32, 1,
-                                  AllPlanes, ZPixmap);
-        if (!image)
-            fail("cannot read the test X11 window");
-        bool match = true;
-        for (int x = 0; x < 32; ++x) {
-            unsigned long expected = x < 16 ? image->red_mask : image->green_mask;
-            if (frame % 2) expected |= image->blue_mask;
-            unsigned long mask = image->red_mask | image->green_mask | image->blue_mask;
-            if ((XGetPixel(image, x, 0) & mask) != expected) match = false;
+    for (int retry = 0; retry < 200; ++retry) {
+        int x, y;
+        if (x11_sample(window, &x, &y)) {
+            /* A reparent or move can still race the query. Trap only this
+             * synchronous read; unrelated protocol errors retain their handler. */
+            read_display = dpy;
+            saved_xerror = XSetErrorHandler(trap_image_error);
+            XImage *image = XGetImage(dpy, window->xlib_window, x, y, 32, 1,
+                                      AllPlanes, ZPixmap);
+            XSetErrorHandler(saved_xerror);
+            read_display = NULL;
+            if (image) {
+                bool match = true;
+                for (int col = 0; col < 32; ++col) {
+                    bool right = (x + col) % 32 >= 16;
+                    unsigned long expected = right ? image->green_mask : image->red_mask;
+                    if (frame % 2) expected |= image->blue_mask;
+                    unsigned long mask = image->red_mask | image->green_mask | image->blue_mask;
+                    if ((XGetPixel(image, col, 0) & mask) != expected) match = false;
+                }
+                XDestroyImage(image);
+                if (match) return;
+            }
         }
-        XDestroyImage(image);
-        if (match) return;
         usleep(10000);
     }
-    fail("X server did not return the presented pattern from the test window");
+    fail("X server did not return the presented pattern from the visible test window");
 }
 
 static void probe_window(bool wayland, const char *target)
@@ -246,13 +295,20 @@ static void probe_window(bool wayland, const char *target)
     waffle_check(config != NULL, "choose EGL config");
     struct waffle_context *ctx = waffle_context_create(config, NULL);
     waffle_check(ctx != NULL, "create EGL context");
-    struct waffle_window *win = waffle_window_create(config, 32, 32);
+    struct waffle_window *win = waffle_window_create(config, 128, 96);
     waffle_check(win != NULL, "create native window");
     waffle_check(waffle_window_show(win), "map native window");
     waffle_check(waffle_make_current(dpy, win, ctx), "make context current");
     verify_renderer(target);
     union waffle_native_window *native = waffle_window_get_native(win);
     waffle_check(native != NULL, "query native window");
+    if (!wayland) {
+        int x, y, tries = 0;
+        while (!x11_sample(native->x11_egl, &x, &y)) {
+            if (++tries >= 400) fail("X window did not become viewable on screen");
+            usleep(10000);
+        }
+    }
     GLint uniform = setup_pattern();
     for (int i = 0; i < 3; ++i) {
         static const struct wl_callback_listener listener = {.done = frame_done};
@@ -262,7 +318,14 @@ static void probe_window(bool wayland, const char *target)
             if (!cb || wl_callback_add_listener(cb, &listener, &done) != 0)
                 fail("cannot request native Wayland frame callback");
         }
-        render_frame(uniform, i);
+        EGLint width, height;
+        EGLDisplay egl = eglGetCurrentDisplay();
+        EGLSurface surface = eglGetCurrentSurface(EGL_DRAW);
+        if (!eglQuerySurface(egl, surface, EGL_WIDTH, &width) ||
+            !eglQuerySurface(egl, surface, EGL_HEIGHT, &height))
+            fail("cannot query EGL drawable geometry");
+        printf("Drawable %dx%d\n", width, height);
+        render_frame(uniform, i, width, height);
         waffle_check(waffle_window_swap_buffers(win), "submit native surface");
         if (wayland) {
             while (!done)
