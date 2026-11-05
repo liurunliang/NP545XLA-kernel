@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Add only the two PCIe0 PHY consumer votes to a separate Samsung trial DTB.
+# Build a separate Samsung PCIe0 trial, with explicit PHY supplies.
 set -euo pipefail
+port0_x1=false
+if [[ ${1:-} == --port0-x1 ]]; then
+    port0_x1=true
+    shift
+fi
 if [[ $# != 2 || ! -f $1 || -e $2 || -L $2 ]]; then
-    echo "Usage: $0 SAMSUNG-PCIE0-TRIAL.dtb NEW-PHY-TRIAL.dtb" >&2
+    echo "Usage: $0 [--port0-x1] SAMSUNG-PCIE0-TRIAL.dtb NEW-PHY-TRIAL.dtb" >&2
     exit 2
 fi
 base=$1
@@ -37,6 +42,17 @@ attach_supply() {
 }
 attach_supply vdda-phy-supply regulators-2 e ldo5 880000
 attach_supply vdda-pll-supply regulators-1 c ldo3 1200000
+if $port0_x1; then
+    controller=/soc@0/pcie@1c00000
+    [[ $(fdtget -t u "$base" "$controller" num-lanes) == 2 &&
+       $(fdtget -t x "$base" "$phy" reg) == '0 1c06000 0 1000' ]]
+    # The stock driver cannot operate this layout. Use a single compatible
+    # so systems with only the older module will leave this PHY unclaimed.
+    fdtput -t s "$trial" "$phy" compatible qcom,sc8180x-pcie0-qmp-gen3x1-phy
+    fdtput -t u "$trial" "$controller" num-lanes 1
+    [[ $(fdtget "$trial" "$phy" compatible) == qcom,sc8180x-pcie0-qmp-gen3x1-phy &&
+       $(fdtget -t u "$trial" "$controller" num-lanes) == 1 ]]
+fi
 chmod 0644 "$trial"
 mv "$trial" "$out"
 echo "Built $out"

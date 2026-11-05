@@ -1,0 +1,108 @@
+--- a/phy-qcom-qmp-pcie.c
++++ b/phy-qcom-qmp-pcie.c
+@@ -3922,10 +3922,11 @@
+ 	.phy_status		= PHYSTATUS,
+ };
+ 
++/* Only used by the NP545XLA PCIe0 companion module. */
+ static const struct qmp_phy_cfg sc8180x_pciephy_cfg = {
+-	.lanes			= 2,
+-
+-	.offsets		= &qmp_pcie_offsets_v4x2,
++	.lanes			= 1,
++
++	.offsets		= &qmp_pcie_offsets_v4x1,
+ 
+ 	.tbls = {
+ 		.serdes		= sc8180x_qmp_pcie_serdes_tbl,
+@@ -4815,6 +4816,28 @@
+ 	return 0;
+ }
+ 
++static void np545_pcie0_report(struct qmp_pcie *qmp, unsigned int val,
++			       unsigned int mask, int ret)
++{
++	int i;
++
++	dev_info(qmp->dev, "PCIe0 x1 PHY+%#x status=%#x mask=%#x power_on=%d\n",
++		 qmp->cfg->offsets->pcs + qmp->cfg->regs[QPHY_PCS_STATUS],
++		 val, mask, ret);
++	for (i = 0; i < ARRAY_SIZE(qmp_pciephy_clk_l); i++)
++		if (qmp->clks[i].clk)
++			dev_info(qmp->dev, "clock %s CCF rate=%lu\n",
++				 qmp->clks[i].id, clk_get_rate(qmp->clks[i].clk));
++	for (i = 0; i < qmp->num_pipe_clks; i++)
++		if (qmp->pipe_clks[i].clk)
++			dev_info(qmp->dev, "clock %s CCF rate=%lu\n",
++				 qmp->pipe_clks[i].id, clk_get_rate(qmp->pipe_clks[i].clk));
++	for (i = 0; i < qmp->cfg->num_vregs; i++)
++		dev_info(qmp->dev, "supply %s enabled=%d uV=%d\n",
++			 qmp->vregs[i].supply, regulator_is_enabled(qmp->vregs[i].consumer),
++			 regulator_get_voltage(qmp->vregs[i].consumer));
++}
++
+ static int qmp_pcie_power_on(struct phy *phy)
+ {
+ 	struct qmp_pcie *qmp = phy_get_drvdata(phy);
+@@ -4871,6 +4894,8 @@
+ 	mask = cfg->phy_status;
+ 	ret = readl_poll_timeout(status, val, !(val & mask), 200,
+ 				 PHY_INIT_COMPLETE_TIMEOUT);
++	/* Report the existing poll's last sample while the clocks are still on. */
++	np545_pcie0_report(qmp, val, mask, ret);
+ 	if (ret) {
+ 		dev_err(qmp->dev, "phy initialization timed-out\n");
+ 		goto err_disable_pipe_clk;
+@@ -5331,9 +5356,15 @@
+ {
+ 	struct device *dev = &pdev->dev;
+ 	struct phy_provider *phy_provider;
++	struct resource *res;
+ 	struct device_node *np;
+ 	struct qmp_pcie *qmp;
+ 	int ret;
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!of_machine_is_compatible("samsung,np545xla") || !res ||
++	    res->start != 0x01c06000 || resource_size(res) != 0x1000)
++		return -ENODEV;
+ 
+ 	qmp = devm_kzalloc(dev, sizeof(*qmp), GFP_KERNEL);
+ 	if (!qmp)
+@@ -5397,7 +5428,8 @@
+ 	return ret;
+ }
+ 
+-static const struct of_device_id qmp_pcie_of_match_table[] = {
++/* Keep upstream declarations intact when compiling this separate module. */
++static const struct of_device_id qmp_pcie_of_match_table[] __maybe_unused = {
+ 	{
+ 		.compatible = "qcom,glymur-qmp-gen4x2-pcie-phy",
+ 		.data = &glymur_qmp_gen4x2_pciephy_cfg,
+@@ -5524,18 +5556,22 @@
+ 	},
+ 	{ },
+ };
+-MODULE_DEVICE_TABLE(of, qmp_pcie_of_match_table);
++static const struct of_device_id np545_pcie0_of_match[] = {
++	{ .compatible = "qcom,sc8180x-pcie0-qmp-gen3x1-phy", .data = &sc8180x_pciephy_cfg },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, np545_pcie0_of_match);
+ 
+ static struct platform_driver qmp_pcie_driver = {
+ 	.probe		= qmp_pcie_probe,
+ 	.driver = {
+-		.name	= "qcom-qmp-pcie-phy",
+-		.of_match_table = qmp_pcie_of_match_table,
++		.name	= "np545-pcie0-qmp-phy",
++		.of_match_table = np545_pcie0_of_match,
+ 	},
+ };
+ 
+ module_platform_driver(qmp_pcie_driver);
+ 
+ MODULE_AUTHOR("Vivek Gautam <vivek.gautam@codeaurora.org>");
+-MODULE_DESCRIPTION("Qualcomm QMP PCIe PHY driver");
++MODULE_DESCRIPTION("Samsung NP545XLA SC8180x PCIe0 single-lane QMP PHY trial");
+ MODULE_LICENSE("GPL v2");

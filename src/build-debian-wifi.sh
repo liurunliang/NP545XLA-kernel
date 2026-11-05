@@ -2,8 +2,13 @@
 # Build add-on modules for the existing USB kernel, keeping its Image and display stack.
 set -euo pipefail
 export PATH="/usr/sbin:/sbin:$PATH" LC_ALL=C
+port0_x1=false
+if [[ ${1:-} == --port0-x1 ]]; then
+    port0_x1=true
+    shift
+fi
 if [[ $# != 4 || $(dpkg --print-architecture) != arm64 ]]; then
-    echo "Usage (Debian arm64): $0 SRC_TREE BUILD_DIR DIAG_ARTIFACTS OUTPUT_DIR" >&2
+    echo "Usage (Debian arm64): $0 [--port0-x1] SRC_TREE BUILD_DIR DIAG_ARTIFACTS OUTPUT_DIR" >&2
     exit 2
 fi
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -47,6 +52,26 @@ checkdir="$check/lib/modules/$release"
 for module in "${modules[@]}"; do
     install -D -m 644 "$obj/$module" "$moddir/kernel/$module"
 done
+version=$release-2
+if $port0_x1; then
+    version=$release-3
+    # Build a companion with its own module name and OF alias. The older DTs
+    # continue loading the stock binary, even with the new package installed.
+    phy_src=$src/drivers/phy/qualcomm/phy-qcom-qmp-pcie.c
+    printf '%s  %s\n' 8f3806c6ba0bbbf5b3b9e4215b1564a4ffe84309eecc3648193c261af855b7c9 "$phy_src" | sha256sum -c -
+    ext=$stage/pcie0
+    mkdir "$ext"
+    cp "$phy_src" "$ext/phy-qcom-qmp-pcie.c"
+    patch --batch --fuzz=0 -d "$ext" -p1 < "$repo/patches/linux-7.0-sc8180x-pcie0-x1.patch"
+    mv "$ext/phy-qcom-qmp-pcie.c" "$ext/np545-pcie0-qmp.c"
+    printf '%s\n' 'obj-m := np545-pcie0-qmp.o' 'ccflags-y += -I$(srctree)/drivers/phy/qualcomm' > "$ext/Kbuild"
+    make -C "$src" O="$obj" M="$ext" ARCH=arm64 KBUILD_MODPOST_WARN= modules
+    [[ $(modinfo -F vermagic "$ext/np545-pcie0-qmp.ko") == "$(modinfo -F vermagic "$obj/${modules[0]}")" ]]
+    trial_module=drivers/phy/qualcomm/np545-pcie0-qmp.ko
+    install -D -m 644 "$ext/np545-pcie0-qmp.ko" "$moddir/kernel/$trial_module"
+    modules+=("$trial_module")
+    verify_kernel
+fi
 mkdir -p "$checkdir"
 cp -al "$moddir/kernel" "$checkdir/"
 printf 'kernel/%s\n' "${modules[@]}" > "$checkdir/modules.order"
@@ -59,9 +84,15 @@ done
 modprobe -d "$check" -S "$release" --resolve-alias 'pci:v000017CBd00001101sv000017CBsd00000108bc02sc80i00' |
     grep -Fxq ath11k_pci
 modprobe -d "$check" -S "$release" --resolve-alias crypto-sha256 | grep -Fxq sha256
+if $port0_x1; then
+    for alias in qcom,sc8180x-qmp-pcie-phy qcom,sc8180x-pcie0-qmp-gen3x1-phy; do
+        module=phy_qcom_qmp_pcie
+        [[ $alias != *-gen3x1-phy ]] || module=np545_pcie0_qmp
+        [[ $(modprobe -d "$check" -S "$release" --resolve-alias "of:NphyT(null)C${alias}") == "$module" ]]
+    done
+fi
 
 name=np545xla-wifi-modules
-version=$release-2
 mkdir "$pkg/DEBIAN"
 cat > "$pkg/DEBIAN/control" <<EOF
 Package: $name

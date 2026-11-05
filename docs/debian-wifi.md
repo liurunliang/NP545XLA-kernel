@@ -67,3 +67,31 @@ rfkill list
 ```sh
 src/build-debian-wifi-phy-dtb.sh daily.dtb daily-wifi-phy-supplies.dtb
 ```
+
+## 第三次试验使用端口 0 的单通道 PHY 布局
+
+三星 Windows 清单中，设备 `ACPI\QCOM04A2\0` 使用 Qualcomm PCIe Platform Extension Plugin 1.0.1600.0，日期为 2021-07-17。Qualcomm 8180 CLS 200.0.62.0 参考包中，`qcppx8180.inf` 的硬件 ID、版本和日期全部吻合。以下偏移来自这个参考包里的原厂 ARM64 驱动，三星本机安装的 SYS 尚未取出做哈希比对。CAB 的 SHA-256 为 `5ffa71ad40056fb1dda96382ec5fc30f75536a98bf15ae37de596943464c6682`，解包后的 SYS 为 `198faec8195a142e8efb7f2f2fd4b24e9eeb584293cf8f86f2bb65e390c5c2d2`。[三星驱动记录](dump/NP545XLA-hw-dump/qualcomm-drivers.txt#L273-L277) · [参考包中的 Qualcomm 原厂文件](https://github.com/WOA-Project/Qualcomm-Reference-Drivers/blob/master/8180_CLS/200.0.62.0/qcppx8180.cab)
+
+在 `qcppx8180.sys` 文件偏移 `0xc140`、`0xc150`，表项指向两套初始化记录（文件偏移 `0xd710`、`0x14050`）。两套都先切换 GCC 的 `0x6b000` 和 `0x6c01c`，对应 SC8180x 的 PCIe **端口 0** 控制器及 PHY 复位。两套的 PHY 电源控制均写 `0x6840`。同一张指针表随后执行 `0x6800 ← 0`、`0x6844 ← 3`，并在 `0x6814` 等待掩码 `0x40` 清零。这里是相对于端口的偏移，PHY 本身从 `0x6000` 开始。本机物理状态地址由此为 `0x01c06814`。上游 v7.0 用于 SC8180x 的双通道布局轮询 `0x01c06a14`，其第二条 RX 通道从单通道布局的 PCS 基址开始。[SC8180x GCC 复位映射](https://github.com/torvalds/linux/blob/v7.0/drivers/clk/qcom/gcc-sc8180x.c#L4516-L4523) · [Linux 单、双通道布局](https://github.com/torvalds/linux/blob/v7.0/drivers/phy/qualcomm/phy-qcom-qmp-pcie.c#L3416-L3434)
+
+试验模块沿用上游 SC8180x 的模拟参数，只改用已有的 v4 单通道布局（TX `+0x200`、RX `+0x400`、PCS `+0x800`、PCS_MISC `+0xc00`）。原厂两套表的端口布局相同，部分调校有差异，包括两套都将 SSC_EN_CENTER 写为 0，Linux 对应值为 1。这一轮先检验布局。三星 DSDT 要求 AUX 19.2 MHz、REFGEN 100 MHz，与上游端口的 assigned clocks 一致。同代厂商 GCC 和 Linux 均未给 PCI0 PIPE gate 注册父时钟，Linux 读取的 PIPE 频率可能为 0，电气信号仍需另行验证。[三星 PEP](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L51954-L52046) · [Qualcomm SDMShrike GCC](https://android.googlesource.com/kernel/msm/+/6ef255005ceaae118d35fba8585de7ba1d4d5efb/drivers/clk/qcom/gcc-sdmshrike.c#2744) · [上游 7.0 DTS](https://github.com/torvalds/linux/blob/v7.0/arch/arm64/boot/dts/qcom/sc8180x.dtsi#L1799-L1821)
+
+从上一轮含正确供电的日用 DT 构建独立产物：
+
+```sh
+work=/var/tmp/np545xla-diag
+src/build-debian-wifi.sh --port0-x1 "$work/linux-7.0" "$work/obj" "$work/artifacts" output/daily/wifi-v3
+src/build-debian-wifi-phy-dtb.sh --port0-x1 output/daily/v3/daily.dtb output/daily/wifi-v3/daily-pcie0-x1.dtb
+```
+
+`7.0.0-3` 包含与 `7.0.0-2` 逐文件 SHA-256 一致的 21 个原有模块，并加入 `np545_pcie0_qmp.ko` 外部试验模块。新模块只匹配试验 DT 的专用 compatible，加载前核对机型与 `phy@1c06000` 地址长度；正常启动后内核会对该外部模块记录 O 标记。软件包安装后，在 USB 的独立入口选择新 DT 并冷启动。旧入口仍选择原驱动，可以直接用于回退。新 DT 相对供电版只有 PCIe0 的 `num-lanes=1` 及其 PHY compatible 两处变更。下次启动从有线 SSH 收集：
+
+```sh
+sudo dmesg | grep -Ei 'PCIe0 x1|CCF rate|supply vdda|1c00000|ath11k|mhi'
+grep -Hi '^PCI_ID=17CB:1101$' /sys/bus/pci/devices/*/uevent
+iw dev
+```
+
+模块日志包含原驱动轮询的最后一个状态值（10 ms 超时，掩码 `0x40`）、CCF 报告的输入时钟、两个电源消费者启用状态和电压。RPMh 返回软件保存的供电投票；板上模拟电压需要仪器测量。正常冷启动即可获取这些指标，测试不使用运行时重新探测。[试验补丁](../patches/linux-7.0-sc8180x-pcie0-x1.patch) · [RPMh 查询实现](https://github.com/torvalds/linux/blob/v7.0/drivers/regulator/qcom-rpmh-regulator.c#L249-L261)
+
+在相同的 Linux 7.0.0 上以 ARM64 UEFI QEMU 冷启动 USB 副本，实际安装 7.0.0-3 后同时加载两个模块。平台总线分别注册 `qcom-qmp-pcie-phy` 和 `np545-pcie0-qmp-phy`，单通道设备标识只解析到后者。端口 0 的电气链路及 QCA639x 仍需三星硬件验证。
