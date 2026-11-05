@@ -33,7 +33,8 @@ modules=(
     drivers/soc/qcom/qmi_helpers.ko
     net/qrtr/qrtr.ko net/qrtr/qrtr-mhi.ko
     net/rfkill/rfkill.ko net/wireless/cfg80211.ko net/mac80211/mac80211.ko
-    lib/crypto/libarc4.ko crypto/michael_mic.ko
+    # The signed regulatory.db uses PKCS#7's runtime shash lookup.
+    lib/crypto/libarc4.ko crypto/michael_mic.ko crypto/sha256.ko
     crypto/aes.ko crypto/ccm.ko crypto/cmac.ko crypto/ctr.ko crypto/gcm.ko crypto/ghash-generic.ko
     drivers/hid/hid-multitouch.ko
 )
@@ -57,9 +58,10 @@ for mod in phy_qcom_qmp_pcie qrtr_mhi ath11k_pci hid_multitouch; do
 done
 modprobe -d "$check" -S "$release" --resolve-alias 'pci:v000017CBd00001101sv000017CBsd00000108bc02sc80i00' |
     grep -Fxq ath11k_pci
+modprobe -d "$check" -S "$release" --resolve-alias crypto-sha256 | grep -Fxq sha256
 
 name=np545xla-wifi-modules
-version=$release-1
+version=$release-2
 mkdir "$pkg/DEBIAN"
 cat > "$pkg/DEBIAN/control" <<EOF
 Package: $name

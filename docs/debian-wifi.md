@@ -21,11 +21,15 @@ src/build-debian-wifi.sh "$work/linux-7.0" "$work/obj" "$work/artifacts" output/
 包中包括 QMP PCIe PHY、MHI、QRTR-MHI、ath11k、mac80211 及其运行时加密模块，以及触控板试验使用的 `hid_multitouch`。它保留原 USB 镜像里的内核和显示驱动。在笔记本 Debian 上使用有线连接安装本地包和辅助工具：
 
 ```sh
-sudo apt install ./np545xla-wifi-modules_7.0.0-1_arm64.deb iw rfkill
+sudo apt install ./np545xla-wifi-modules_7.0.0-2_arm64.deb iw rfkill
 sudo update-alternatives --set regulatory.db /lib/firmware/regulatory.db-upstream
 ```
 
 包依赖 `firmware-atheros` 和 `wireless-regdb`。Debian 包为 QCA6390 hw2.0 提供 `amss.bin`、`m3.bin`、`board-2.bin`。监管数据库提供两套签名，由 alternatives 同时切换数据库及其签名。这个自编内核信任 Linux 主线内置的监管数据库公钥。[Debian 固件清单](https://packages.debian.org/trixie/all/firmware-atheros/filelist)
+
+模块包 `7.0.0-2` 补充了 `sha256.ko`。Debian 的上游监管数据库签名使用 SHA-256；cfg80211 会在加载数据库时调用 PKCS#7 验证，按签名中的算法名请求 `sha256`。这个内核的底层 SHA-256 库已内建，向 Crypto API 注册算法的驱动则按模块构建。升级已经运行的系统后，执行 `sudo iw reg reload` 可让 cfg80211 重新读取签名。[Linux 7.0 监管数据库验证](https://github.com/torvalds/linux/blob/v7.0/net/wireless/reg.c) · [PKCS#7 摘要选择](https://github.com/torvalds/linux/blob/v7.0/crypto/asymmetric_keys/pkcs7_verify.c) · [SHA-256 算法注册](https://github.com/torvalds/linux/blob/v7.0/crypto/sha256.c)
+
+用正式 Image 和同一份 Debian `wireless-regdb 2026.05.30-1~deb13u1` 启动两次离线 QEMU。两次均载入了 sforshee 与 wens 的 X.509 证书。旧包导致 cfg80211 报告数据库签名无效，测试设置国家规则后仍显示 `country 00`；新包自动载入 `sha256` 并正确读出测试规则 `country DE: DFS-ETSI`。两次测试均未使用射频硬件。
 
 在构建机上把片段应用到已有的 **Debian 专用 DTB**，另存后交给独立 GRUB 试验入口；保留基线入口和原诊断入口。以下文件名中的 `debian-base.dtb` 指从持久镜像取得、已禁用内置 UFS 的设备树。
 
