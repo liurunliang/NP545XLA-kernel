@@ -63,14 +63,15 @@ apt-get install -y --no-install-recommends \
     xfce4 xfce4-terminal lightdm lightdm-gtk-greeter xserver-xorg-core \
     xserver-xorg-input-libinput libinput-tools xinput x11-xserver-utils x11-utils mesa-utils \
     libgl1-mesa-dri firefox-esr fonts-noto-cjk network-manager network-manager-gnome \
-    wpasupplicant dbus-user-session libpam-systemd \
+    wpasupplicant polkitd dbus-user-session libpam-systemd \
     onboard gsettings-desktop-schemas gir1.2-atspi-2.0 at-spi2-core
 systemctl enable --now NetworkManager.service
 systemctl disable NetworkManager-wait-online.service
 systemctl enable lightdm.service
 systemctl set-default graphical.target
 systemctl start lightdm.service
-for unit in ssh systemd-networkd NetworkManager lightdm; do
+systemctl start polkit.service
+for unit in ssh systemd-networkd NetworkManager polkit lightdm; do
     systemctl is-active --quiet "$unit.service" || { echo "$unit is not active." >&2; exit 1; }
 done
 nmcli -f DEVICE,TYPE,STATE device
