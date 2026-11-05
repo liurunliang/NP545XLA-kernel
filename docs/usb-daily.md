@@ -65,3 +65,5 @@ sudo systemctl enable np545xla-daily-probe.service
 首版日用设备树已在三星上绑定 `14E5:650E` 的 HID 多点触控驱动，输入设备来自 880000.i2c 的 0x40。两次启动均完成枚举。现场在登录页实测用内置触控板移动指针并点击；GPIO104 中断随使用累计到 1,528 次。无线控制器在初始化 PCIe0 PHY 时报告超时，此时还没有 PCI 无线设备。
 
 使用单通道 PCIe0 配置后，QCA6390 在三次冷启动中完成枚举。首次从 Xfce 的网络菜单连接 Wi-Fi 时，精简系统缺少 `polkitd`，桌面提示 `Not authorized to control networking`。补装后，当前登录会话中的 `nm-applet` 通过联网授权，现场连上 5 GHz 接入点。限定到 `wlp1s0` 的 DNS 查询和 HTTPS 下载页请求均成功，HTTP 状态为 200，TLS 证书校验通过。保存的连接在下次启动的登录页就已自动取得无线地址。[无线驱动与实测](debian-wifi.md)
+
+在最终的 Xfce/X11 实机验收中，操作者确认用内置实体键盘在 Firefox 输入框按 A 后看到了 `a`。拔掉网线和外接鼠标后，操作者用内置触控板点击链接，经内置 Wi-Fi 打开了 Debian 下载页。前一段的 HTTP 状态码来自单独的无线链路测试。Wayland 原生客户端的离屏绘制、内屏输出和硬件加速的验证范围另见[图形兼容性记录](debian-graphics.md)。
