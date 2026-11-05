@@ -4,6 +4,8 @@
 
 Custom Linux kernel + boot ISO for the Samsung Galaxy Book Go 5G (SC8180XP).
 
+The persistent USB image adds a 12 GiB Debian 13 root filesystem and keeps the RAM diagnostics in the boot menu. [Build and use the Debian USB](docs/usb-debian.md)
+
 The stock Ubuntu kernel doesn't include sc8180x-specific drivers (GCC, interconnect, SMMU power domains) — they're either missing entirely or loaded as modules that can't probe because their dependencies form a circular chain. This kernel builds everything critical as built-in (`=y`) so the hardware actually initializes.
 
 ## Quick Start
