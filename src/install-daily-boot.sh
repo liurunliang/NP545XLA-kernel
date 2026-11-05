@@ -4,11 +4,15 @@ set -euo pipefail
 export LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin
 die() { echo "$*" >&2; exit 1; }
 trial=
+lid_trial=
 if [[ ${1:-} == --adreno && $# == 4 ]]; then
     trial=$(realpath "$2")
     set -- "$3" "$4" "$trial/BOOTAA64.EFI"
+elif [[ ${1:-} == --lid && $# == 3 ]]; then
+    lid_trial=$(realpath "$2")
+    set -- "$3" "$lid_trial/lid.dtb" "$lid_trial/BOOTAA64.EFI"
 fi
-[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb"
+[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt"
 manifest=$(realpath "$1")
 dt=$(realpath "$2")
 efi=$(realpath "$3")
@@ -26,6 +30,13 @@ if [[ -n $trial ]]; then
         die 'Invalid Adreno trial package'
     (cd "$trial" && sha256sum --strict -c SHA256SUMS)
     (cd /var/lib/np545xla-adreno/firmware && sha256sum --strict -c "$trial/firmware.sha256")
+fi
+if [[ -n $lid_trial ]]; then
+    [[ $(awk '{print $2}' "$lid_trial/SHA256SUMS") == $'BOOTAA64.EFI\nlid.dtb\nbase.txt' ]] || die 'Invalid lid package'
+    (cd "$lid_trial" && sha256sum --strict -c SHA256SUMS)
+    read -r lid_bundle base_efi base_dt base_overlay extra < "$lid_trial/base.txt"
+    [[ $lid_bundle == "$bundle" && -z $extra && $base_efi =~ ^[0-9a-f]{64}$ &&
+       $base_dt =~ ^[0-9a-f]{64}$ && $base_overlay =~ ^[0-9a-f]{64}$ ]] || die 'Invalid lid package base identifiers'
 fi
 [[ $(fdtget "$dt" / compatible) == *samsung,np545xla* ]] || die 'DT belongs to a different machine'
 [[ $(fdtget "$dt" /soc@0/ufshc@1d84000 status) == disabled ]] || die 'Daily DT must disable internal UFS'
@@ -65,6 +76,23 @@ install_verified() {
     cmp "$input" "$target"
 }
 current="$boot/daily-$bundle.dtb"
+if [[ -n $lid_trial ]]; then
+    # The accepted EFI + DT + exact unified DRM overlay must already be present.
+    # Install only the content-addressed trial DT, then publish its menu last.
+    [[ -s $loader.baseline && -s $loader.pre-adreno ]] || die 'Expected the existing Debian and Adreno loader backups'
+    printf '%s  %s\n' "$base_dt" "$current" "$base_overlay" "$boot/adreno-$base_overlay.cpio.gz" | sha256sum --strict -c -
+    if ! cmp -s "$efi" "$loader"; then
+        printf '%s  %s\n' "$base_efi" "$loader" | sha256sum --strict -c - || die 'Current EFI differs from the accepted base'
+    fi
+    lid_digest=$(sha256sum < "$dt" | cut -d' ' -f1)
+    target="$boot/lid-$lid_digest.dtb"
+    [[ ! -e $target ]] || cmp -s "$dt" "$target" || die 'Conflicting content-addressed lid DT'
+    install_verified "$dt" "$target"
+    install_verified "$efi" "$loader"
+    sha256sum "$loader" "$target" "$current" "$boot/adreno-$base_overlay.cpio.gz"
+    echo 'Installed the optional Lid test menu entry. The default is the verified Adreno desktop.'
+    exit 0
+fi
 if [[ -n $trial ]]; then
     cmp -s "$dt" "$current" || die 'Adreno trial requires the currently installed daily DT'
     [[ -s $loader.baseline ]] || die 'Install and test the standard daily entry first'

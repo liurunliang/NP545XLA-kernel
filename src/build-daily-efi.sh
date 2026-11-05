@@ -2,6 +2,23 @@
 # Add a board-test entry to the accepted USB menu without rebuilding the root.
 set -euo pipefail
 export LC_ALL=C
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+
+pack_menu() {
+    local config=$1 output=$2
+    local modules='part_gpt fat iso9660 normal configfile linux fdt search search_fs_file echo sleep test boot smbios'
+    grub-script-check "$config"
+    grub-mkstandalone -O arm64-efi --locales='' --fonts='' --themes='' --install-modules="$modules" --modules="$modules" \
+        -o "$stage/BOOTAA64.EFI" "boot/grub/grub.cfg=$config"
+    grub-file --is-arm64-efi "$stage/BOOTAA64.EFI"
+    install -m 644 "$stage/BOOTAA64.EFI" "$output"
+}
+
+if [[ $# == 3 && $1 == --config ]]; then
+    pack_menu "$2" "$3"
+    exit
+fi
 overlay=
 overlay_mode=${1:-}
 if [[ $# == 4 && ( $overlay_mode == --adreno-overlay || $overlay_mode == --default-adreno-overlay ) ]]; then
@@ -13,8 +30,6 @@ src=$(cd "$(dirname "$0")" && pwd)
 bundle=$(awk '$1 == "Bundle:" {print $2}' "$1")
 [[ $bundle =~ ^[0-9a-f]{16}$ ]] || { echo 'Invalid Debian image manifest' >&2; exit 1; }
 out=$(realpath -m "$2")
-stage=$(mktemp -d)
-trap 'rm -rf "$stage"' EXIT
 {
     cat "$src/diag-grub.cfg" "$src/debian-grub.cfg"
     cat <<'GRUB'
@@ -51,9 +66,4 @@ GRUB
         fi
     fi
 } | sed "s/@BUNDLE@/$bundle/g" > "$stage/grub.cfg"
-grub-script-check "$stage/grub.cfg"
-modules='part_gpt fat iso9660 normal configfile linux fdt search search_fs_file echo sleep test boot smbios'
-grub-mkstandalone -O arm64-efi --locales='' --fonts='' --themes='' --install-modules="$modules" --modules="$modules" \
-    -o "$stage/BOOTAA64.EFI" "boot/grub/grub.cfg=$stage/grub.cfg"
-grub-file --is-arm64-efi "$stage/BOOTAA64.EFI"
-install -m 644 "$stage/BOOTAA64.EFI" "$out"
+pack_menu "$stage/grub.cfg" "$out"
