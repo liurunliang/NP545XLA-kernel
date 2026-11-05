@@ -1,0 +1,85 @@
+#!/bin/sh
+# PID 1 in the persistent entry only. /init remains the complete diagnostic rescue.
+export PATH=/bin
+mount -t devtmpfs devtmpfs /dev
+exec </dev/console >/dev/console 2>&1
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mkdir -p /newroot
+
+rescue() {
+    echo "DEBIAN ROOT RESCUE: $*"
+    echo "<4>DEBIAN ROOT RESCUE: $*" >/dev/kmsg
+    if grep -q ' /newroot ' /proc/mounts; then umount /newroot; fi
+    umount /sys
+    umount /proc
+    # /init mounts its own devtmpfs and brings up the same keyed SSH service.
+    exec /init
+}
+
+read -r expected </etc/np545-root-uuid || rescue 'missing embedded root UUID'
+if grep -qw 'diag.mode=dt' /proc/cmdline; then
+    for node in /sys/bus/platform/devices/*1d84000*; do
+        [ ! -e "$node" ] || rescue 'internal UFS controller is enabled'
+    done
+    modprobe phy_qcom_edp && modprobe panel_edp && modprobe msm separate_gpu_kms=1 ||
+        rescue 'native display modules failed to load'
+fi
+
+usb_parent() {
+    ancestor=$(readlink -f "$1") || return 1
+    while [ "$ancestor" != /sys ] && [ "$ancestor" != / ]; do
+        if [ -r "$ancestor/idVendor" ] && [ -r "$ancestor/idProduct" ] &&
+            grep -qx 'DEVTYPE=usb_device' "$ancestor/uevent"; then
+            return 0
+        fi
+        ancestor=${ancestor%/*}
+    done
+    return 1
+}
+
+# Probe only real USB partitions. Wait for enumeration to settle before
+# opening a writable filesystem, and fail closed if cloned sticks are present.
+previous=
+settled=0
+tries=0
+while [ "$tries" -lt 30 ]; do
+    target=
+    for part in /sys/class/block/*; do
+        [ -r "$part/partition" ] && usb_parent "$part" || continue
+        device=/dev/${part##*/}
+        [ -b "$device" ] || continue
+        uuid=$(blkid -p -n ext4 -o value -s UUID "$device") || continue
+        [ "$uuid" = "$expected" ] || continue
+        [ -z "$target" ] || rescue "multiple USB ext4 partitions match $expected"
+        target=$device
+    done
+    if [ -n "$target" ] && [ "$target" = "$previous" ]; then
+        settled=$((settled + 1))
+        [ "$settled" -lt 3 ] || break
+    else
+        settled=0
+    fi
+    previous=$target
+    tries=$((tries + 1))
+    sleep 1
+done
+[ "$settled" -ge 3 ] || rescue "USB ext4 UUID $expected missing or unstable"
+
+# Inspect the identity before journal replay or any writable mount.
+mount -t ext4 -o ro,noload "$target" /newroot || rescue "cannot inspect $target"
+[ -x /newroot/usr/lib/systemd/systemd ] &&
+    awk -v uuid="UUID=$expected" '$1 == uuid && $2 == "/" && $3 == "ext4" {found++} END {exit found != 1}' /newroot/etc/fstab ||
+    rescue 'Debian root identity or init does not match'
+umount /newroot || rescue 'cannot release read-only check'
+mount -t ext4 -o rw "$target" /newroot || rescue "cannot mount $target writable"
+echo "DEBIAN ROOT: $target UUID=$expected USB ext4; starting systemd"
+moved=
+for fs in sys proc dev; do
+    if ! mount -o move "/$fs" "/newroot/$fs"; then
+        for rollback in $moved; do mount -o move "/newroot/$rollback" "/$rollback"; done
+        rescue "cannot hand /$fs to systemd"
+    fi
+    moved="$fs $moved"
+done
+exec switch_root -c /dev/console /newroot /sbin/init
