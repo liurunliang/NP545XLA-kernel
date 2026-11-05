@@ -1,0 +1,26 @@
+From: Maximilian Luz <luzmaximilian@gmail.com>
+Subject: [PATCH] drm/msm/a6xx: Restore GBIF CX config for A640 family
+
+Backport of patch 1/4 posted by Val Packett. Restore the GBIF client QoS
+register list used before commit 60a4e18e0e8a during GMU resume.
+
+Link: https://lore.kernel.org/dri-devel/20261103011358.65398-2-val@packett.cool/
+
+--- a/drivers/gpu/drm/msm/adreno/a6xx_catalog.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_catalog.c
+@@ -983,6 +983,7 @@
+ 		.a6xx = &(const struct a6xx_info) {
+ 			.hwcg = a640_hwcg,
+ 			.protect = &a630_protect,
++			.gbif_cx = a640_gbif,
+ 			.gmu_cgc_mode = 0x00020202,
+ 			.prim_fifo_threshold = 0x00180000,
+ 		},
+@@ -1106,6 +1107,7 @@
+ 		.a6xx = &(const struct a6xx_info) {
+ 			.hwcg = a640_hwcg,
+ 			.protect = &a630_protect,
++			.gbif_cx = a640_gbif,
+ 			.gmu_cgc_mode = 0x00020202,
+ 			.prim_fifo_threshold = 0x00200200,
+ 		},

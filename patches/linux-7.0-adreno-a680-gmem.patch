@@ -1,0 +1,39 @@
+From: Val Packett <val@packett.cool>
+Subject: [PATCH] drm/msm/a6xx: Fix GMEM range on a680
+
+Backport of patch 2/4. Preserve the existing v7.0 behavior for other GPUs.
+Program the base and expose the same address through MSM_PARAM_GMEM_BASE.
+
+Link: https://lore.kernel.org/dri-devel/20261103011358.65398-3-val@packett.cool/
+
+--- a/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
+@@ -1347,9 +1347,13 @@
+ 	if (!(adreno_is_a650_family(adreno_gpu) ||
+ 	      adreno_is_a702(adreno_gpu) ||
+ 	      adreno_is_a730(adreno_gpu))) {
+-		gmem_range_min = adreno_is_a740_family(adreno_gpu) ? SZ_16M : SZ_1M;
+-
+-		/* Set the GMEM VA range [0x100000:0x100000 + gpu->gmem - 1] */
++		gmem_range_min = SZ_1M;
++		if (adreno_is_a740_family(adreno_gpu))
++			gmem_range_min = SZ_16M;
++		else if (adreno_is_a680(adreno_gpu))
++			gmem_range_min = 0;
++
++		/* Set the UCHE address range to the GPU-specific GMEM base and size. */
+ 		gpu_write64(gpu, REG_A6XX_UCHE_GMEM_RANGE_MIN, gmem_range_min);
+ 
+ 		gpu_write64(gpu, REG_A6XX_UCHE_GMEM_RANGE_MAX,
+--- a/drivers/gpu/drm/msm/adreno/adreno_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/adreno_gpu.c
+@@ -376,7 +376,8 @@
+ 		*value = adreno_gpu->info->gmem;
+ 		return 0;
+ 	case MSM_PARAM_GMEM_BASE:
+-		if (adreno_gpu->info->family >= ADRENO_6XX_GEN4)
++		if (adreno_gpu->info->family >= ADRENO_6XX_GEN4 ||
++		    adreno_is_a680(adreno_gpu))
+ 			*value = 0;
+ 		else
+ 			*value = 0x100000;

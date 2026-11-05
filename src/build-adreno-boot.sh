@@ -2,8 +2,13 @@
 # Build the optional USB EFI + versioned initramfs supplement in Debian.
 set -euo pipefail
 export LC_ALL=C
+module_dir=
+if [[ ${1:-} == --msm-module && $# == 6 ]]; then
+    module_dir=$(realpath "$2")
+    shift 2
+fi
 if [[ $# != 4 || -e $4 || -L $4 ]]; then
-    echo "Usage: $0 debian-image-manifest.txt DEBIAN_FIRMWARE_DIR qcdxkmsuc8180.mbn NEW_OUTPUT_DIR" >&2
+    echo "Usage: $0 [--msm-module DIR] debian-image-manifest.txt DEBIAN_FIRMWARE_DIR qcdxkmsuc8180.mbn NEW_OUTPUT_DIR" >&2
     exit 2
 fi
 src=$(cd "$(dirname "$0")" && pwd)
@@ -28,9 +33,20 @@ HASHES
 (cd "$fw"; sha256sum -c "$stage/firmware.sha256")
 install -m 0644 "$stage/firmware.sha256" "$fw/SHA256SUMS"
 install -m 0755 "$src/debian-init" "$work/debian-init-adreno"
+if [[ -n $module_dir ]]; then
+    # This exact uncompressed member is listed in the base initramfs modules.dep.
+    # Overlay it at its original path so BusyBox uses the existing dependency index.
+    module=lib/modules/7.0.0/kernel/drivers/gpu/drm/msm/msm.ko
+    (cd "$module_dir"; sha256sum -c SHA256SUMS)
+    [[ $(modinfo -F name "$module_dir/msm.ko") == msm ]]
+    [[ $(modinfo -F vermagic "$module_dir/msm.ko") == 7.0.0\ * ]]
+    install -D -m 0644 "$module_dir/msm.ko" "$work/$module"
+    mkdir -p "$work/etc"
+    (cd "$work"; sha256sum "$module" > etc/np545-adreno-module.sha256)
+fi
 (
     cd "$work"
-    # No root entry and no original PID 1. Only extra paths are unpacked.
+    # Only the opt-in assembly includes the replacement MSM module.
     find . -mindepth 1 -exec touch -d @0 -- {} +
     find . -mindepth 1 -print0 | sort -z | cpio --null --quiet --reproducible -o -H newc --owner=0:0
 ) | gzip -n > "$stage/adreno.cpio.gz"

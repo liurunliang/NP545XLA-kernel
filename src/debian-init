@@ -25,6 +25,12 @@ if [ "$0" = /debian-init-adreno ]; then
         (cd "$fw" && sha256sum -c SHA256SUMS) ||
         rescue 'Adreno initramfs firmware path or checksum failed'
     echo 'DEBIAN ADRENO: trial PID 1 verified the three firmware files'
+    if [ -f /etc/np545-adreno-module.sha256 ]; then
+        (cd / && sha256sum -c /etc/np545-adreno-module.sha256) ||
+            rescue 'Adreno trial kernel module checksum failed'
+        echo 'DEBIAN ADRENO: verified the GBIF and GMEM trial module'
+        echo '<6>DEBIAN ADRENO: verified the GBIF and GMEM trial module' >/dev/kmsg
+    fi
     separate_gpu_kms=0
 fi
 if grep -qw 'diag.mode=dt' /proc/cmdline; then
