@@ -48,4 +48,4 @@ python3 src/test-debian-qemu.py --image output/debian-final/np545xla-debian.img 
 
 在诊断 Linux 上，内置键盘实际产生了 A 键的按下和松开事件。其 GPIO91 中断也曾在 60 秒内增加 143,290 次。临时解绑该键盘后，IRQ 注销，60 秒内未观测到新增的不完整 HID 报告；在线重新绑定失败，冷启动后恢复。日常 Debian 保留键盘，用限额 32 MiB 的内存 journal 保存服务日志，内核消息可通过 `sudo dmesg` 查看。高频中断的根因仍可用原诊断入口继续调查。
 
-本机 ACPI 的 `ECKB._CRS` 描述了 GIO0 的 640 号脚、低电平触发和上拉。GIO0 到 TLMM 的引脚映射仍待核实。Linux 7.0 中的 `incomplete report (11/261)` 表示一次读回 11 字节，报告头却声明长度为 261；驱动丢弃了这条报告。按键实测和异常计数应分别记录。[Linux I²C HID 输入实现](https://github.com/torvalds/linux/blob/v7.0/drivers/hid/i2c-hid/i2c-hid-core.c)
+本机 ACPI 的 `ECKB._CRS` 描述了 GIO0 的 640 号脚、低电平触发和上拉。该虚拟脚对应 TLMM GPIO125，第五项日用入口据此配置。Linux 7.0 中的 `incomplete report (11/261)` 表示一次读回 11 字节，报告头却声明长度为 261；驱动丢弃了这条报告。按键实测和异常计数应分别记录。[日用设备树与键盘验证](usb-daily.md) · [Linux I²C HID 输入实现](https://github.com/torvalds/linux/blob/v7.0/drivers/hid/i2c-hid/i2c-hid-core.c)

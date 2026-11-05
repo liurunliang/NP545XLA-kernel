@@ -55,3 +55,15 @@ rfkill list
 ```
 
 如果端口报告链路未建立，先记录控制器、PHY 和延迟探测情况；此时尚未到无线驱动加载固件的阶段。如果已枚举而固件启动失败，再检查驱动报告的 QMI 板号与 `board-2.bin` 匹配情况。这两个结果对应不同的排查路径。
+
+## 第一次 PCIe0 实机启动
+
+2026-11-05 从日常入口启动后，`1c06000.phy` 已绑定到 QMP 驱动，PCIe0 的供应设备均已就绪。启动日志在 20.499792 秒记录 `phy initialization timed-out`，PCIe0 随即返回 `-ETIMEDOUT`，系统没有枚举到无线 PCI 设备。Linux v7.0 在此处已启动本地 SerDes/PCS，等待 PHY 状态就绪超时；PCIe 接口尚未开始链路训练。运行中的 regulator summary 显示该 PHY 的两个电源消费者均指向 dummy regulator。[QMP 初始化及超时条件](https://github.com/torvalds/linux/blob/v7.0/drivers/phy/qualcomm/phy-qcom-qmp-pcie.c)
+
+在同次启动的 195.404497 秒，通过 `drivers_probe` 只重探了 PCIe0。最后取到的日志是主桥地址范围，随后有线 SSH 失去响应。后续使用独立入口冷启动，不复用这次在线重探操作。
+
+第二个试验 DT 只将 PCIe0 PHY 的 `vdda-phy` 接至 LDO5_E（0.88 V）、`vdda-pll` 接至 LDO3_C（1.20 V）。三星 PEP 的 PCI0 D0 供电记录和上游 SC8180x 板级 PHY 定义支持这个对应关系。这两路此前已有其他设备在用；是否能让 PHY 就绪仍待验证。构建时以上一次测试的 DT 为输入，输出到新文件，再核对两个消费者、PHY 状态和 PCI 枚举。
+
+```sh
+src/build-debian-wifi-phy-dtb.sh daily.dtb daily-wifi-phy-supplies.dtb
+```
