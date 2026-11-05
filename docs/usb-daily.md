@@ -61,7 +61,7 @@ sudo bash install-daily-boot.sh --adreno unified-trial-v2 manifest.txt daily.dtb
 
 首次使用原始 Linux 7.0 模块启动统一 DRM 后，三星在约 49 秒出现 GMU 调频请求超时，随后两次触发 watchdog 和 Xorg 提交队列恢复。Surface Pro X 上的同款 A680 已复现这一顺序。上游作者定位到内核重构遗漏了 A680 的四个 GBIF 服务质量寄存器。第二版补充包回移这项修复，并将 A680 的片上 GMEM 基址及用户态查询值同步设为零。后者针对同一 GPU 在 Vulkan 中出现的纹理损坏。[上游 GBIF 修复](https://lore.kernel.org/dri-devel/20261103011358.65398-2-val@packett.cool/) · [上游 GMEM 修复与实测](https://lore.kernel.org/dri-devel/20261103011358.65398-3-val@packett.cool/)
 
-第二版在补充包中覆盖 `lib/modules/7.0.0/kernel/drivers/gpu/drm/msm/msm.ko`。它对照原始模块检查 vermagic、依赖、别名与导入符号。实机启动后可执行 `sudo od -An -tx1 -j16 -N20 /sys/module/msm/notes/.note.gnu.build-id`，将 20 字节与本次构建输出 `msm-v2/build-id.txt` 比较。默认日用入口加载原始模块。QEMU 已通过 USB 冷启动验证第二版叠加包的校验、根盘 SSH 登录及原 Debian 入口的回退，GPU 稳定性需在三星上验收。
+第二版在补充包中覆盖 `lib/modules/7.0.0/kernel/drivers/gpu/drm/msm/msm.ko`。它对照原始模块检查 vermagic、依赖、别名与导入符号。实机启动后可执行 `sudo od -An -tx1 -j16 -N20 /sys/module/msm/notes/.note.gnu.build-id`，将 20 字节与本次构建输出 `msm-v2/build-id.txt` 比较。默认日用入口加载原始模块。QEMU 已通过 USB 冷启动验证第二版叠加包的校验、根盘 SSH 登录及原 Debian 入口的回退。三星实机已核对运行模块的构建 ID，并用 FD680 完成 100 秒 X11 连续绘图，期间新增 GPU 故障为零。[内屏与图形协议实测](debian-graphics.md)
 
 三星 DSDT 按 `SOID=0x194`、`SIDV=0x20001`、`SIDT=3` 为 Windows 选择 GPU 表 P003，活动频率为 156、235、315、392、530、595、625、670、718 MHz。Linux v7.0 原 DT 提供 177、256、315、405、461、500、514 MHz。第一版实机的 `simple_ondemand` 在 177、405 与 514 MHz 之间记录到 178 次转换。第二版沿用这个策略与频率表，以便检验驱动修复。两套表共同列出的 315 MHz 可在后续诊断中用作固定频率对照。[三星 DSDT](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L85690) · [Linux v7.0 设备树](https://github.com/torvalds/linux/blob/v7.0/arch/arm64/boot/dts/qcom/sc8180x.dtsi#L2286)
 
