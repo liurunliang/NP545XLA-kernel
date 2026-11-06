@@ -55,3 +55,26 @@ sudo bash install-daily-boot.sh --bluetooth boot manifest.txt
 首个指令在两组中均未收到有效 HCI 版本事件，驱动均返回 `-110`。此次下拉配置不足以恢复版本握手。新 DTB SHA-256 为 `cbefd7885609f98d4a8bf508b11151999c6e15085d0e4b9da37b5e6f0cc7bbdc`。两组的电平、命令时间线、内核日志、差异及临时采样器源码保存在工作区的 `output/bluetooth/gpio170-pulldown/`。
 
 试验结束后八个一次性启动标记均为零；三星正常重启进入默认 Latest（启动 ID `64c3a79d-9983-444f-ae8a-6e66b5b412d3`），仍从同一 U 盘运行，LightDM 活动，临时采样模块和服务已移除。
+
+## GPIO46 的 RX 下降沿唤醒（2026-11-06）
+
+在 GPIO170 已下拉的测试项上，UART13 的主中断仍为 GIC SPI 585（高电平触发），第二个中断指定 TLMM GPIO46（下降沿触发）。RX 工作时保持 `qup13` 和上拉；GENI 关闭串口资源时，只有 RX 切为 GPIO 输入并下拉。两种树解析后的供电引用、GPIO170 配置、3,200,000 波特率及 Wi-Fi 路径均相同。蓝牙项的 GRUB 菜单差异仅为 DTB 摘要。[三星 UR18 资源](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L69913) · [测试设备树](../dts/sc8180xp-np545xla-bluetooth.dtso) · [上游 GENI 资源切换](https://github.com/torvalds/linux/blob/v7.0/drivers/soc/qcom/qcom-geni-se.c#L597-L645)
+
+基线和新版分别从正常关机进入测试项，新版另做一次相同的冷启动。三次都在驱动初始化前开启只读采样，在 35 秒内按 50 µs 周期读取 GPIO46、GPIO43、GPIO170 的 TLMM 状态，并以同一单调时钟记录被动 HCI 监听结果。各次均未溢出，最大采样间隔分别为 131、137、225 µs；采样可以观察数字电平变化，但不能还原 3.2 Mbaud 的串口字节。
+
+| 真机结果 | 基线（仅 GPIO170 下拉） | 加 GPIO46 唤醒 | 同一新版复测 |
+|---|---:|---:|---:|
+| 启动 ID | `6faf95d8-1c03-4628-b3bf-8d4b1e98c0a9` | `f15832fd-5f86-42e7-ba49-ac99e0c616be` | `9b25f0b1-2b3a-4a12-8bff-12d38ac23bf5` |
+| GPIO170 首次置位至首条请求前采到的 RX 电平变化数 | 0 | 5 | 7 |
+| 首条请求时，GPIO46 / GPIO43 输入 | 低 / 高 | 高 / 低 | 高 / 低 |
+| 首条 `0xfc00`，开机后秒数 | 19.676377 | 20.768836 | 20.156392 |
+| 首次命令超时，开机后秒数 | 21.699635 | 22.782415 | 22.173680 |
+| 首轮握手后读到的累计专用唤醒 IRQ 数（含重试） | 无专用 IRQ | 4 | 3 |
+
+两次新版启动均注册了 `c8c000.serial:wakeup`（Linux IRQ 167、硬件 GPIO46），电源管理的 wakeup 状态为 enabled。首条请求时 GPIO46 已恢复为 UART 功能和上拉，GPIO43 保持 UART 功能，数字输入为低（CTS 有效）。两次 GPIO46 在 35 秒窗口内均采到 22 次电平变化，其中包括休眠引脚状态切换，不能把变化数当成收到的字节数。
+
+复测中，IRQ 计数从 0 首次增到 1 被定位在开机后 22.171606–22.173909 s，与首条请求超时处于同一窗口。第一次版本请求后，两次新版都记录了 H4 帧重组错误 `-84`，均没有可由 HCI 层确认的版本事件，最终为 `-110`。结论是专用唤醒 IRQ 有活动，两次新版都出现 RX 活动和有效 CTS，芯片版本仍未读出。此处验证的是冷启动和串口运行时电源管理，整机合盖唤醒未做测试。
+
+新版 DTB SHA-256 为 `d24e97db822d43d3460a0eb5f25ae3ea3b51ebe7ab64d5303ea2e224b4de33fa`。原始采样、IRQ 计数、HCI 日志、设备树和 GRUB 差异在工作区 `output/bluetooth/gpio46-rx-wake/`。
+
+八个一次性标记均已清零。三星普通重启进入默认 Latest（启动 ID `31c676f5-22fa-492e-ace1-d6fcdbf21aca`），同一 Debian U 盘、LightDM 和 Wi-Fi 正常，蓝牙测试服务 inactive，临时观测器已移除。

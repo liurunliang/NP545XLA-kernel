@@ -13,7 +13,7 @@ sha() { sha256sum < "$1" | cut -d' ' -f1; }
 read -r bundle _ daily adreno < "$base/base.txt"
 cp "$base/battery.dtb" "$stage/base.dtb"
 # The deployed tree retains few symbols; resolve the required symbols by their verified paths.
-for pair in 'tlmm /soc@0/pinctrl@3100000' 'io_1p8 /pm8150-s4-regulator' \
+for pair in 'tlmm /soc@0/pinctrl@3100000' 'intc /soc@0/interrupt-controller@17a00000' 'io_1p8 /pm8150-s4-regulator' \
             'vph /vph-pwr-regulator' 'bt_s5a /soc@0/rsc@18200000/regulators-0/smps5' \
             'bt_s6c /soc@0/rsc@18200000/regulators-1/smps6'; do
     read -r symbol path <<< "$pair"
@@ -31,6 +31,13 @@ fdtoverlay -i "$stage/base.dtb" -o "$stage/bluetooth.dtb" "$stage/bt.dtbo"
 uart=/soc@0/geniqup@cc0000/serial@c8c000
 [[ $(fdtget "$stage/bluetooth.dtb" "$uart/bluetooth" compatible) == qcom,qca6390-bt ]]
 [[ $(fdtget "$stage/bluetooth.dtb" "$uart" status) == okay ]]
+# A plugin overlay cannot delete the inherited primary-only interrupts property.
+# Prove the extended form retains that interrupt before removing it in the trial.
+gic=$(fdtget -t u "$stage/base.dtb" /soc@0/interrupt-controller@17a00000 phandle)
+tlmm=$(fdtget -t u "$stage/base.dtb" /soc@0/pinctrl@3100000 phandle)
+[[ $(fdtget -t u "$stage/base.dtb" "$uart" interrupts) == '0 585 4' ]]
+[[ $(fdtget -t u "$stage/bluetooth.dtb" "$uart" interrupts-extended) == "$gic 0 585 4 $tlmm 46 2" ]]
+fdtput -d "$stage/bluetooth.dtb" "$uart" interrupts
 python3 "$here/read-grub-menu.py" "$base/BOOTAA64.EFI" > "$stage/menu"
 python3 - "$stage/menu" "$(sha "$base/battery.dtb")" "$(sha "$stage/bluetooth.dtb")" <<'PY'
 import re, sys

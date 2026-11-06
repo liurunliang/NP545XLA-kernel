@@ -8,6 +8,13 @@
 		rts-tx-pins { pins = "gpio44", "gpio45"; function = "qup13"; drive-strength = <2>; bias-disable; };
 		rx-pins { pins = "gpio46"; function = "qup13"; bias-pull-up; };
 	};
+	/* UR18 wake resource: falling edge on RX, pulled down while asleep. */
+	bt_rx_sleep: bt-rx-sleep-state {
+		pins = "gpio46";
+		function = "gpio";
+		input-enable;
+		bias-pull-down;
+	};
 	bt_enable_pin: bt-enable-state {
 		pins = "gpio170";
 		function = "gpio";
@@ -55,8 +62,11 @@
 
 &{/soc@0/geniqup@cc0000/serial@c8c000} {
 	status = "okay";
-	pinctrl-names = "default";
+	/* Retain GIC SPI 585 (level high); GPIO46 is the dedicated wake IRQ. */
+	interrupts-extended = <&intc 0 585 4>, <&tlmm 46 2>;
+	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&bt_uart_pins>;
+	pinctrl-1 = <&bt_rx_sleep>;
 	uart-has-rtscts;
 	bluetooth {
 		compatible = "qcom,qca6390-bt";
