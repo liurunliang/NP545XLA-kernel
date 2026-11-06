@@ -88,6 +88,8 @@ src/build-lid-boot.sh output/debian-final/manifest.txt output/adreno/default-men
 
 恢复时 xHCI 控制器重新初始化，USB 网卡重新枚举。Wi-Fi、SSH 和 USB 根盘写入、同步、读回均恢复，ext4 错误数为零。内核未记录具体的唤醒中断号。原始记录在构建 Mac 的 `output/daily/lid-test/physical-d523f6e4/`。
 
+**重复合盖仍有漏报。** 同一次开机稍后，10:42:01 操作者先手动请求睡眠，10:42:07 系统恢复并记录合盖，10:42:10 记录开盖。这是内核计数中的第二次睡眠。10:45:11 仅合盖，GPIO50 由高变低，IRQ 166 计数仍为 7，输入设备保持 `SW_LID=0`。约 18 秒后开盖，GPIO50 恢复高电平，IRQ 计数才变为 8。期间 logind 没有收到新的盖子事件，成功计数一直为 2，累计睡眠时间保持 45.606 秒。已定位到这次合盖的下降沿没有传递到 GPIO 中断，仍需查明中断控制器丢失该边沿的条件。现场对照记录为同一目录的 `gpio-irq-reproduction.txt` 和 `second-window.txt`。
+
 ## 启动探测日志
 
 这台机器的键盘异常报告可在一秒内覆盖原来的内核缓冲区。日用入口将缓冲区设为 16 MiB。在三星 Debian 上安装限时记录服务并启用，下一次该入口开机时，前三分钟的驱动探测信息会保存到内存中的 `/run/np545xla-daily-probe.log`。
