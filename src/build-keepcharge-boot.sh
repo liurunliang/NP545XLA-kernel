@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Append one opt-in entry to the installed battery diagnostic menu.
+# Extend the installed battery menu or promote its verified GPIO101 entry.
 set -euo pipefail
 export LC_ALL=C
 mode=keepcharge
 case ${1:-} in
-    --hotplug|--ic10irq|--irqack|--gpiocharge) mode=${1#--}; shift ;;
+    --hotplug|--ic10irq|--irqack|--gpiocharge|--latest) mode=${1#--}; shift ;;
 esac
 if [[ $# != 2 || -e $2 || -L $2 ]]; then
-    echo "Usage: $0 [--hotplug|--ic10irq|--irqack|--gpiocharge] INSTALLED_BOOT_DIR NEW_OUTPUT_DIR" >&2; exit 2
+    echo "Usage: $0 [--hotplug|--ic10irq|--irqack|--gpiocharge|--latest] INSTALLED_BOOT_DIR NEW_OUTPUT_DIR" >&2; exit 2
 fi
 here=$(cd "$(dirname "$0")" && pwd)
 base=$(realpath "$1")
@@ -28,6 +28,18 @@ import sys
 menu = Path(sys.argv[1])
 text = menu.read_text()
 mode = sys.argv[3]
+if mode == "latest":
+    title = "menuentry 'Debian 13 - GPIO101 interrupt-driven charge (Samsung)' --id gpiocharge {"
+    match = re.search("^" + re.escape(title) + r".*?^\}", text, re.M | re.S)
+    if (text.count(title) != 1 or not match
+            or f"devicetree /boot/battery-{sys.argv[2]}.dtb" not in match[0]
+            or "np545.gpiocharge=1 systemd.wants=np545-gpiocharge.service" not in match[0]
+            or "if [ \"$default\" = daily ]; then set default=adreno-unified; fi" not in text):
+        sys.exit("Expected the installed GPIO101 and Adreno entries")
+    # Leave explicit one-shot requests and the QEMU boot selection in control.
+    menu.write_text(text.replace(title, "menuentry 'Debian 13 - Latest (Samsung)' --id gpiocharge {")
+                    + '\nif [ "$default" = adreno-unified ]; then set default=gpiocharge; fi\n')
+    sys.exit(0)
 base_name = "Battery read-only test (Samsung)' --id battery-ro"
 base_diag = "battery"
 if mode in ("ic10irq", "irqack", "gpiocharge"):

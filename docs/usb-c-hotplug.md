@@ -143,3 +143,11 @@ GPIO101 共收到 11 次下降沿，连续序号 1–11；11 次发送清除命�
 共收到 12 次 GPIO101 下降沿，12 次清除后均实际读回高电平，前 11 次之后均收到下一次新的内核事件。结束时 GPIO 中断计数增量也为 12。正常停止服务后，充电目标读回 0 mA，受电开关关闭，GPIO101 已释放。逐轮证据在构建机 `output/gpiocharge/events.jsonl`、`battery.jsonl`、`proof.txt` 和 `last-monitor.txt`。
 
 七个一次性启动标记均为零。正常重启回原默认 Adreno 日用项（启动 ID `e5e52d1a-c812-45ba-b5a5-8327896bf677`），同一 U 盘根分区正常挂载，LightDM 活动，七个测试服务均为 inactive。复核记录保存在构建机的 `output/gpiocharge/return.txt` 和 `output/gpiocharge/daily-confirmed.txt`。
+
+## 默认启动最新版本
+
+U 盘的三星默认项为 **Debian 13 - Latest (Samsung)**，使用已验证的 Adreno 桌面、合盖内核、电池驱动和 GPIO101 热插服务。旧 Adreno、单次诊断和 QEMU 入口仍可选择。摄像头的 GPIO166 设备树和服务仍在原 720p 入口。
+
+已有 GPIO101 菜单时，在 ARM64 构建机执行 `src/build-keepcharge-boot.sh --latest output/gpiocharge/boot output/latest/boot`，然后在目标 U 盘执行 `sudo bash install-daily-boot.sh --latest boot manifest.txt`。安装器将切换前的 EFI 保存为同一 U 盘上的 `EFI/BOOT/BOOTAA64.EFI.pre-latest`。要临时回退，可在 GRUB 选择 **Adreno unified DRM trial (Samsung)**。
+
+2026-11-06，在七个一次性标记均为零的情况下普通重启，三星从同一 USB 根分区进入最新版（启动 ID `9d4b67ae-53b8-407a-b1cc-e759196b44dc`）。LightDM 登录界面运行，Adreno 的 `separate_gpu_kms=N`。第 18.8 秒 GPIO101 服务开始等待拔线中断。UPower 的 `DisplayDevice` 显示 99%、正在充电；第 76.8 秒原口为 12 V / 3 A，电池实测 +393 mA。本次使用原充电器带电启动。充电服务仍按原实现核验启动时的 12 V 合约。
