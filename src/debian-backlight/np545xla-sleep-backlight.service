@@ -1,0 +1,12 @@
+[Unit]
+Description=Blank the NP545XLA backlight during lid-edge system suspend
+ConditionKernelCommandLine=np545.lid_edge=1
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/modprobe np545_sleep_backlight
+ExecStop=/usr/sbin/modprobe -r np545_sleep_backlight
+
+[Install]
+WantedBy=multi-user.target
