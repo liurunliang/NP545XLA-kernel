@@ -33,6 +33,15 @@ def pd_mailbox(chip):
         fcntl.flock(chip.fd, fcntl.LOCK_UN)
 
 
+# /run is per boot. The ACK test publishes only a status captured before clearing
+# GPIO101, since a detached IC10 may sleep and NACK subsequent polls.
+ACK_DETACH = Path("/run/np545-irq-ack-detach")
+
+
+def idle_sink(state):
+    return state & 0xff == 0 and not (state & 0xe2000000)
+
+
 def profile(pd):
     """Position and exact fixed 12 V / 3 A PDO from this live Source_Capabilities."""
     if not pd.get("requested_mV") or int(pd["state_hex"], 16) & 0xe0000000:
@@ -55,13 +64,24 @@ class Sink(Registers):
     def __init__(self):
         super().__init__("ic10", 0x33)
 
-    def check(self, known, voltage):
-        pd = port("ic10")
+    def check(self, known, voltage, *, allow_detach=False):
+        try:
+            pd = port("ic10")
+        except OSError as exc:
+            if allow_detach and exc.errno in (errno.ENXIO, errno.EREMOTEIO):
+                return None
+            raise
+        state = int(pd["state_hex"], 16)
+        if allow_detach and not state & 0xe2000000 and (idle_sink(state) or not pd.get("requested_mV")):
+            return None
         if (profile(pd) != known or pd["requested_mV"] != voltage or pd["requested_mA"] != 3000
                 or (voltage == 12000 and pd["selected_pdo"] != known[0])):
             raise StopCharge("source, selected contract or role changed")
         lp = self.word(0x60)
-        if lp & 0x48 or lp & 0xa0 != 0xa0 or self.word(0x20) != int(pd["state_hex"], 16):
+        end = self.word(0x20)
+        if allow_detach and idle_sink(end) and not lp & 0x48:
+            return None
+        if lp & 0x48 or lp & 0xa0 != 0xa0 or end != int(pd["state_hex"], 16):
             raise StopCharge(f"port not safely attached and dry (LP={lp:#010x})")
         return pd
 
@@ -150,6 +170,19 @@ def is_detached(pd):
             and not pd["source"])
 
 
+def detached_since(since, use_ack):
+    pd = poll_port()
+    confirmed = is_detached(pd)
+    if not confirmed and use_ack and (not pd or idle_sink(int(pd["state_hex"], 16))):
+        try:
+            stamp, state = map(int, ACK_DETACH.read_text().split())
+        except FileNotFoundError:
+            return False
+        confirmed = (since < stamp <= time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+                     and idle_sink(state) and not state & (1 << 24))
+    return confirmed and pack()["current_now"] < 0
+
+
 def contract(voltage):
     pd = poll_port()
     return pd if pd.get("requested_mV") == voltage and pd.get("requested_mA") == 3000 else None
@@ -178,12 +211,15 @@ def charge_after_replug(sink, chip, known):
         last = None
         positive = False
         while not stopping.is_set():
-            pd = poll_port()
-            if is_detached(pd):
-                return
-            sink.check(known, 12000)
+            try:
+                if sink.check(known, 12000, allow_detach=True) is None:
+                    return
+            except OSError as exc:
+                if exc.errno in (errno.ENXIO, errno.EREMOTEIO):
+                    return
+                raise
             if not chip.input_present():
-                raise StopCharge("adapter input lost")
+                return  # stop; only a confirmed detach can arm the next connection
             chip.settings(expected)
             chip.check_limits()
             battery = pack()
@@ -213,7 +249,7 @@ def charge_after_replug(sink, chip, known):
         finally:
             # Never send a switch command to a port which has changed roles.
             pd = poll_port() if switch_owned else {}
-            if pd.get("attached") and not pd["source"]:
+            if pd.get("attached") and pd.get("pd_state") != 0 and not pd["source"]:
                 sink.consumer(False)
                 log("consumer-off")
 
@@ -236,8 +272,10 @@ def run():
         if chip.word(0x14) not in (0, FIRMWARE_MA):
             raise StopCharge("unknown firmware charge target")
         log("ready-for-detach", pdo=known[0], ac=present, consumer=consumer, **pack())
+        connected_at = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+        use_ack = "np545.irqack=1" in args
         while not stopping.is_set():
-            wait_for("physical detach", lambda: is_detached(poll_port()) and pack()["current_now"] < 0, 1800)
+            wait_for("physical detach", lambda: detached_since(connected_at, use_ack), 1800)
             if chip.word(0x14) == FIRMWARE_MA and not chip.input_present():
                 chip.set_current(0)
             log("detached", **pack())
@@ -245,6 +283,7 @@ def run():
             new = wait_for("reattach", lambda: contract(5000) or contract(12000), 1800)
             if profile(new) != known:
                 raise StopCharge("advertised 12 V PDO changed")
+            connected_at = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
             log("reattached", pd=new)
             if new["requested_mV"] == 5000:
                 sink.select(known)

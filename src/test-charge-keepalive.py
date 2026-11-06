@@ -228,6 +228,35 @@ class HotplugTests(unittest.TestCase):
                         hp.charge_after_replug(sink, chip, hp.profile(self.twelve))
                     self.assertEqual(writes, [(0, 1024), (10, 0)])
 
+    def test_acknowledged_detach_only_after_current_connection(self):
+        with TemporaryDirectory() as tmp:
+            evidence = Path(tmp) / "last-detach"
+            evidence.write_text("1000 150933760")  # explicit detached 0x08ff1100
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(hp, "ACK_DETACH", evidence))
+                stack.enter_context(patch.object(hp, "poll_port", return_value={}))
+                stack.enter_context(patch.object(hp, "pack", return_value={"current_now": -800000}))
+                stack.enter_context(patch.object(hp.time, "CLOCK_BOOTTIME", 7, create=True))
+                stack.enter_context(patch.object(hp.time, "clock_gettime_ns", return_value=1100))
+                self.assertTrue(hp.detached_since(900, True))
+                self.assertFalse(hp.detached_since(1000, True))
+                self.assertFalse(hp.detached_since(900, False))
+                with patch.object(hp, "poll_port", return_value=dict(state_hex="19ff2415")):
+                    self.assertFalse(hp.detached_since(900, True))
+                with patch.object(hp, "pack", return_value={"current_now": 1}):
+                    self.assertFalse(hp.detached_since(900, True))
+
+    def test_no_charge_during_detach_transition(self):
+        sink = hp.Sink.__new__(hp.Sink)
+        for raw in ("08ff1100", "09ff2400", "19ff2415"):
+            with patch.object(hp, "port", return_value=dict(state_hex=raw)):
+                self.assertIsNone(sink.check((3, 0), 12000, allow_detach=True))
+                with self.assertRaises(hp.StopCharge):
+                    sink.check((3, 0), 12000)
+        with patch.object(hp, "port", return_value=dict(state_hex="39ff2415")):
+            with self.assertRaises(hp.StopCharge):
+                sink.check((3, 0), 12000, allow_detach=True)
+
     def test_disconnect_requires_real_state(self):
         self.assertFalse(hp.is_detached({}))
         self.assertFalse(hp.is_detached(dict(stable_state=False)))

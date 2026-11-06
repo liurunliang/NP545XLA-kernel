@@ -12,7 +12,7 @@ import gpiod
 from gpiod.line import Bias, Clock, Direction, Edge
 
 import ic10_irq as trace
-from hotplug import pd_mailbox, send
+from hotplug import ACK_DETACH, idle_sink, pd_mailbox, send
 from np545_charge_observe import DT, Registers
 
 PIN = 101
@@ -54,6 +54,11 @@ def acknowledge(chip, line, seq):
             trace.log("clear-skipped", seq=seq, state=state, status_hex=status.hex())
             return
         start = trace.boottime()
+        if (idle_sink(state) and not state & (1 << 24)
+                and idle_sink(end := chip.word(0x20)) and not end & (1 << 24)):
+            tmp = ACK_DETACH.with_suffix(".new")
+            tmp.write_text(f"{start} {state}\n")
+            tmp.replace(ACK_DETACH)
         send(chip, bytes.fromhex("00 10 01"))
         written = trace.boottime()
         until = time.monotonic() + 0.03
