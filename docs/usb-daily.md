@@ -110,6 +110,14 @@ src/build-lid-boot.sh output/debian-final/manifest.txt output/adreno/default-men
 
 三次合盖后的快照均显示 PDC52 已切换到上升沿（类型 6），三次开盖后均已重新等待下一次下降沿（类型 2）。原版间歇漏掉的下降沿在两次连续唤醒后的后续合盖均正常送达。三轮结束后仍是同一开机编号和同一 Xfce 会话。USB 控制器每次恢复都重新初始化，但 SSH、Wi-Fi 和 USB 根盘写入、同步、读回通过，ext4 错误数为零。原始记录位于 `output/daily/lid-edge/physical-2d0bf52c/`，包括逐事件快照 `cycles.jsonl`、逐轮计数 `cycle-summary.txt` 及 logind 和内核日志 `journal.txt`。
 
+#### 睡眠时内屏背光
+
+在上述 GPIO50 修复内核上，现场观察到合盖十几秒后缝隙里仍有光。2026-11-06 保持盖子打开、从 Xfce 手动睡眠后，从正面看到整块面板仍有均匀微光。北京时间 11:19:30 至 11:20:08 日志记录了一次 `s2idle` 进入和恢复，成功计数由 3 增至 4，失败计数为 0。此次观察区分了系统睡眠和物理背光关闭。
+
+这台机器的 BOE 07d3 面板通过 eDP 输出，设备树只有 `edp-panel` 和 `no-hpd`，没有指定背光设备，内核日志显示面板供电使用 dummy regulator。实机没有注册 `/sys/class/backlight`。Linux 配置为 `DRM=y`、`BACKLIGHT_CLASS_DEVICE=m`，这组配置下当前 `panel-edp` 模块没有调用外部背光或 AUX 背光的注册函数。本机 DSDT 的 GPU0 面板配置声明 PMIC 背光、9 位 PWM、频率字段 586 及 100 级亮度。相同 SoC 的参考板不能代替三星实机的通道和引脚映射。调查记录位于 `output/daily/backlight-diag/`。[三星面板固件](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L86620) · [Linux eDP 面板驱动](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/panel/panel-edp.c#L890)
+
+屏幕点亮时，通过现有 SPMI regmap 只读取 USID 5 的五个已知 PWM 外设。第 3 路（从 0 计数，地址 `0xbc00`）是唯一启用且频率与原厂配置一致的候选：纯 PWM 子类型 `0x0b`、9 位、585.937 Hz、占空计数 256/511、使能 `0x80`。第 2 路也启用，但频率为 18.75 kHz、占空比 100%，其余三路均未启用。只读快照为 `output/daily/backlight-diag/pwm-live.txt`。[高通纯 PWM 寄存器实现](https://android.googlesource.com/kernel/msm.git/+/android-wear-6.0.1_r0.40/drivers/pwm/pwm-qpnp.c#555)
+
 ## 启动探测日志
 
 这台机器的键盘异常报告可在一秒内覆盖原来的内核缓冲区。日用入口将缓冲区设为 16 MiB。在三星 Debian 上安装限时记录服务并启用，下一次该入口开机时，前三分钟的驱动探测信息会保存到内存中的 `/run/np545xla-daily-probe.log`。
