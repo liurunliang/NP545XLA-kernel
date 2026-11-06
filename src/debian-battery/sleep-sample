@@ -1,0 +1,6 @@
+#!/bin/sh
+# Capture the closest available readings on either side of physical suspend.
+grep -qw 'np545.battery=1' /proc/cmdline || exit 0
+case "$1" in
+    pre|post) /usr/bin/np545xla-battery-sample --event "$1" | systemd-cat -t np545-battery ;;
+esac

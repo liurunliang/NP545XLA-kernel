@@ -1,0 +1,7 @@
+[Unit]
+Description=Sample the Samsung battery during the read-only trial
+ConditionKernelCommandLine=np545.battery=1
+
+[Service]
+ExecStart=/usr/bin/np545xla-battery-sample --watch
+SyslogIdentifier=np545-battery
