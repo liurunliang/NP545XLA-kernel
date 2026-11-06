@@ -12,8 +12,10 @@ trap 'rm -rf "$stage"' EXIT
 sha() { sha256sum < "$1" | cut -d' ' -f1; }
 read -r bundle _ daily adreno < "$base/base.txt"
 cp "$base/battery.dtb" "$stage/base.dtb"
-# The deployed tree retains few symbols; resolve these two by verified paths.
-for pair in 'tlmm /soc@0/pinctrl@3100000' 'io_1p8 /pm8150-s4-regulator'; do
+# The deployed tree retains few symbols; resolve the required symbols by their verified paths.
+for pair in 'tlmm /soc@0/pinctrl@3100000' 'io_1p8 /pm8150-s4-regulator' \
+            'vph /vph-pwr-regulator' 'bt_s5a /soc@0/rsc@18200000/regulators-0/smps5' \
+            'bt_s6c /soc@0/rsc@18200000/regulators-1/smps6'; do
     read -r symbol path <<< "$pair"
     if ! fdtget "$stage/base.dtb" "$path" phandle >/dev/null 2>&1; then
         fdtget -p "$stage/base.dtb" "$path" >/dev/null

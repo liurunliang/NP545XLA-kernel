@@ -16,31 +16,19 @@
 	};
 };
 
-&{/} {
-	/* WBRX on CLSC8180 votes S5A/S6C/S7C at these levels. The trial
-	 * retains the firmware's supply state and does not program RPMh.
-	 * WLAN GPIO169 remains owned by the existing Wi-Fi path. */
-	bt_s5a: bt-s5a-fw {
-		compatible = "regulator-fixed";
-		regulator-name = "bt-fw-s5a";
-		regulator-min-microvolt = <1950000>;
-		regulator-max-microvolt = <1950000>;
-		regulator-always-on;
-	};
-	bt_s6c: bt-s6c-fw {
-		compatible = "regulator-fixed";
-		regulator-name = "bt-fw-s6c";
-		regulator-min-microvolt = <1350000>;
-		regulator-max-microvolt = <1350000>;
-		regulator-always-on;
-	};
-	bt_s7c: bt-s7c-fw {
-		compatible = "regulator-fixed";
-		regulator-name = "bt-fw-s7c";
+/* WBRX on CLSC8180 votes S5A/S6C/S7C. Reuse the active S5A/S6C
+ * levels. The first supported S7C step satisfying 950 mV is 952 mV.
+ * Keep the common rail on for the existing PCIe WLAN path as well. */
+&{/soc@0/rsc@18200000/regulators-1} {
+	vdd-s7-supply = <&vph>;
+	bt_s7c: smps7 {
 		regulator-min-microvolt = <950000>;
-		regulator-max-microvolt = <950000>;
+		regulator-max-microvolt = <952000>;
+		regulator-boot-on;
 		regulator-always-on;
 	};
+};
+&{/} {
 	qca6390-pmu {
 		compatible = "qcom,qca6390-pmu";
 		pinctrl-names = "default";
