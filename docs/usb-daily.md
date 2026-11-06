@@ -131,9 +131,15 @@ src/build-lid-boot.sh output/debian-final/manifest.txt output/adreno/default-men
 | 11:37:45.804 | 17.168 秒 | 0.821 秒 | 17.989 秒 |
 | 11:38:22.401 | 15.571 秒 | 0.961 秒 | 16.532 秒 |
 
-这台三星的 logind 使用 30 秒的启动及恢复后合盖等待设置 `HoldoffTimeoutSec`，用于等待扩展坞及外接显示器枚举。先前超过该等待期的三轮测试中，合盖到挂起请求约为 40 毫秒。当前驱动在系统挂起时关灯，尚未将背光关闭独立接到合盖或显示器关闭事件。记录见 `output/daily/backlight-diag/lid-off-timing.txt` 及 `fixed-sleep-journal.txt`。[Debian logind 的等待设置](https://manpages.debian.org/trixie/systemd/logind.conf.5.en.html#HoldoffTimeoutSec=)
+这台三星的 logind 使用 30 秒的启动及恢复后合盖等待设置 `HoldoffTimeoutSec`，用于等待扩展坞及外接显示器枚举。先前超过该等待期的三轮测试中，合盖到挂起请求约为 40 毫秒。以上测量使用背光包 `7.0.0-1`，该版本在系统挂起时关灯。记录见 `output/daily/backlight-diag/lid-off-timing.txt` 及 `fixed-sleep-journal.txt`。[Debian logind 的等待设置](https://manpages.debian.org/trixie/systemd/logind.conf.5.en.html#HoldoffTimeoutSec=)
 
 同芯片的 Lenovo Flex 5G 和 Qualcomm Primus 分别描述盖子开关和内屏背光。eDP 面板引用 PWM 背光，DRM 关闭面板时先禁用背光；是否在合盖时请求关闭内屏仍由显示或电源策略决定。另一个可参考的做法是 ChromiumOS 的内屏控制器直接响应盖子状态，将合盖亮度设为零并保留外接屏，然后由电源管理独立处理挂起。参考板的 PWM 通道和使能引脚与三星不同。[Flex 5G](https://github.com/torvalds/linux/blob/v7.0/arch/arm64/boot/dts/qcom/sc8180x-lenovo-flex-5g.dts#L25-L46) · [Primus](https://github.com/torvalds/linux/blob/v7.0/arch/arm64/boot/dts/qcom/sc8180x-primus.dts#L28-L53) · [DRM 面板关闭顺序](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/drm_panel.c#L266-L310) · [ChromiumOS 内屏策略](https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/power_manager/powerd/policy/internal_backlight_controller.cc#907)
+
+##### 合盖时立即熄灭内屏
+
+`7.0.0-2` 在同一背光模块中直接订阅板载 `/gpio-keys` 的 `SW_LID`。它在工作队列中保存当前 PWM 占空值并关掉内屏背光，开盖时按原值恢复。模块分别记录合盖与挂起状态，任一条件成立时保持熄灯。因此刚唤醒后再合盖，内屏可以在 logind 等待扩展坞期间就熄灭。系统是否睡眠仍由 logind 决定。此逻辑也适用于图形登录页和 X11/Wayland 会话。[板级实现](../src/debian-backlight/np545_sleep_backlight.c)
+
+在已安装旧版的三星上升级时，保持盖子打开，先用 `sudo systemctl stop np545xla-sleep-backlight.service` 停止旧服务，确认 `/sys/module/np545_sleep_backlight` 已消失，再校验并安装新版 deb。随后启动同名服务。包保留原来的开机启用状态。降级可以按相同顺序安装已保存的 `7.0.0-1` 包。停用当前版本时，停止服务会先解除盖子控制并恢复保存的亮度，再卸载模块。
 
 ## 启动探测日志
 
