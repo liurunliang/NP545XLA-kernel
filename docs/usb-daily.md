@@ -84,6 +84,10 @@ src/build-lid-boot.sh output/debian-final/manifest.txt output/adreno/default-men
 
 在 SanDisk 上首次安装后，卸载再只读挂载，已核对启动分区全部 14 个文件。候选 DTB 的 SHA-256 为 `16c50d3e0048fda7ce311888db605346845f7ecde279c42fdfa7f3e4fdcc4de1`，EFI 为 `81e381fe2af8aeb5095fc25b6b1b8bd7f73be499f4dd1ed8f4ef24725e481278`。使用同一 EFI 的 ARM64 QEMU 已验证倒计时加载原日用设备树、手选试验入口加载候选设备树、候选缺失时明确报错。QEMU 的测试范围截至 GRUB 选取设备树。
 
+2026-11-06，三星从该试验入口启动，`gpio-keys` 注册了 GPIO50 的盖子开关，logind 收到 `SW_LID=1` 后自动请求睡眠。北京时间 10:38:32 合盖，10:39:19 日志记录系统恢复并收到 `SW_LID=0`。按包含和排除睡眠时间的两种时钟之差，本轮在 `s2idle` 中度过 43.453 秒，内核计数为成功 1 次、失败 0 次。现场确认仅打开盖子，内屏就很快自行亮起，原 Xfce Wayland 会话继续运行。
+
+恢复时 xHCI 控制器重新初始化，USB 网卡重新枚举。Wi-Fi、SSH 和 USB 根盘写入、同步、读回均恢复，ext4 错误数为零。内核未记录具体的唤醒中断号。原始记录在构建 Mac 的 `output/daily/lid-test/physical-d523f6e4/`。
+
 ## 启动探测日志
 
 这台机器的键盘异常报告可在一秒内覆盖原来的内核缓冲区。日用入口将缓冲区设为 16 MiB。在三星 Debian 上安装限时记录服务并启用，下一次该入口开机时，前三分钟的驱动探测信息会保存到内存中的 `/run/np545xla-daily-probe.log`。
