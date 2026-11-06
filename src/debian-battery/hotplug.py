@@ -188,7 +188,9 @@ def contract(voltage):
     return pd if pd.get("requested_mV") == voltage and pd.get("requested_mA") == 3000 else None
 
 
-def charge_after_replug(sink, chip, known):
+def charge_after_replug(sink, chip, known, wait=None):
+    if wait is None:
+        wait = stopping.wait
     switch_owned = False
     charge_owned = False
     try:
@@ -240,7 +242,8 @@ def charge_after_replug(sink, chip, known):
                     began = now
                 log("refresh", ac=True, readback_mA=ma, **battery)
                 expected, last = ma, now
-            stopping.wait(1)
+            if wait(1):
+                return
     finally:
         try:
             if charge_owned:
@@ -254,6 +257,22 @@ def charge_after_replug(sink, chip, known):
                 log("consumer-off")
 
 
+def boot_profile():
+    wait_for("SBS gauge", lambda: (BATTERY / "device/sbs_status").exists(), 60)
+    initial = wait_for("original 12 V source", lambda: contract(12000), 40)
+    return profile(initial)
+
+
+def check_boot_input(sink, chip, known):
+    sink.check(known, 12000)
+    present, consumer = chip.input_present(), sink.switches()
+    if not present or not consumer:
+        raise StopCharge(f"unexpected boot path: AC={present}, consumer={consumer}")
+    if chip.word(0x14) not in (0, FIRMWARE_MA):
+        raise StopCharge("unknown firmware charge target")
+    log("ready-for-detach", pdo=known[0], ac=present, consumer=consumer, **pack())
+
+
 def run():
     args = Path("/proc/cmdline").read_text().split()
     if (not {"np545.hotplug=1", "np545.battery=1"} <= set(args) or "np545.keepcharge=1" in args
@@ -261,17 +280,9 @@ def run():
         raise StopCharge("requires the dedicated Samsung hotplug entry")
     with Path("/run/np545-hotplug.claimed").open("x"):
         pass
-    wait_for("SBS gauge", lambda: (BATTERY / "device/sbs_status").exists(), 60)
-    initial = wait_for("original 12 V source", lambda: contract(12000), 40)
-    known = profile(initial)
+    known = boot_profile()
     with Sink() as sink, InputCharger() as chip:
-        sink.check(known, 12000)
-        present, consumer = chip.input_present(), sink.switches()
-        if not present or not consumer:
-            raise StopCharge(f"unexpected boot path: AC={present}, consumer={consumer}")
-        if chip.word(0x14) not in (0, FIRMWARE_MA):
-            raise StopCharge("unknown firmware charge target")
-        log("ready-for-detach", pdo=known[0], ac=present, consumer=consumer, **pack())
+        check_boot_input(sink, chip, known)
         connected_at = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
         use_ack = "np545.irqack=1" in args
         while not stopping.is_set():

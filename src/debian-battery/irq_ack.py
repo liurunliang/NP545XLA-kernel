@@ -26,7 +26,7 @@ class AckPort(Registers):
         super().__init__("ic10", 0x33)
 
 
-def acknowledge(chip, line, seq):
+def acknowledge(chip, line, seq, *, publish_detach=True):
     level = lambda: line.get_value(PIN).value
     # Exclude select-PDO, state-machine and consumer-switch transactions until
     # the status snapshot and its acknowledgment are complete.
@@ -54,8 +54,9 @@ def acknowledge(chip, line, seq):
             trace.log("clear-skipped", seq=seq, state=state, status_hex=status.hex())
             return
         start = trace.boottime()
-        if (idle_sink(state) and not state & (1 << 24)
-                and idle_sink(end := chip.word(0x20)) and not end & (1 << 24)):
+        detached = (idle_sink(state) and not state & (1 << 24)
+                    and idle_sink(end := chip.word(0x20)) and not end & (1 << 24))
+        if detached and publish_detach:
             tmp = ACK_DETACH.with_suffix(".new")
             tmp.write_text(f"{start} {state}\n")
             tmp.replace(ACK_DETACH)
@@ -72,6 +73,27 @@ def acknowledge(chip, line, seq):
             # A new assertion and a stuck-low line cannot be distinguished here.
             # Do not emit another ACK on the same low level.
             trace.log("release-unconfirmed", seq=seq)
+            return
+        return state, detached
+
+
+def claim_gpio(stack, consumer):
+    for path in sorted(Path("/dev").glob("gpiochip*")):
+        gpio = stack.enter_context(gpiod.Chip(str(path)))
+        if gpio.get_info().label == trace.LABEL:
+            break
+    else:
+        raise RuntimeError("Samsung TLMM not found")
+    state, owner = trace.lines()[PIN]
+    info = gpio.get_line_info(PIN)
+    if (not state.startswith("in ") or "func0" not in state.split() or owner != "UNCLAIMED"
+            or info.used or info.direction != Direction.INPUT):
+        raise RuntimeError(f"GPIO101 unavailable: {state} / {owner}")
+    cfg = gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.AS_IS,
+                             edge_detection=Edge.FALLING, event_clock=Clock.MONOTONIC)
+    line = stack.enter_context(gpio.request_lines({PIN: cfg}, consumer=consumer,
+                                                  event_buffer_size=128))
+    return line
 
 
 def run():
@@ -81,21 +103,7 @@ def run():
             or b"samsung,np545xla" not in (DT / "compatible").read_bytes().split(b"\0")):
         raise SystemExit("select the independent IC10 IRQ acknowledgment trial")
     with ExitStack() as stack:
-        for path in sorted(Path("/dev").glob("gpiochip*")):
-            gpio = stack.enter_context(gpiod.Chip(str(path)))
-            if gpio.get_info().label == trace.LABEL:
-                break
-        else:
-            raise RuntimeError("Samsung TLMM not found")
-        state, owner = trace.lines()[PIN]
-        info = gpio.get_line_info(PIN)
-        if (not state.startswith("in ") or "func0" not in state.split() or owner != "UNCLAIMED"
-                or info.used or info.direction != Direction.INPUT):
-            raise RuntimeError(f"GPIO101 unavailable: {state} / {owner}")
-        cfg = gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.AS_IS,
-                                 edge_detection=Edge.FALLING, event_clock=Clock.MONOTONIC)
-        line = stack.enter_context(gpio.request_lines({PIN: cfg}, consumer="np545-irq-ack",
-                                                      event_buffer_size=128))
+        line = claim_gpio(stack, "np545-irq-ack")
         chip = stack.enter_context(AckPort())
         recent = deque(maxlen=64)
         seq = 0

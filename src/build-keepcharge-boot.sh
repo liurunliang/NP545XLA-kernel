@@ -4,10 +4,10 @@ set -euo pipefail
 export LC_ALL=C
 mode=keepcharge
 case ${1:-} in
-    --hotplug|--ic10irq|--irqack) mode=${1#--}; shift ;;
+    --hotplug|--ic10irq|--irqack|--gpiocharge) mode=${1#--}; shift ;;
 esac
 if [[ $# != 2 || -e $2 || -L $2 ]]; then
-    echo "Usage: $0 [--hotplug|--ic10irq|--irqack] INSTALLED_BOOT_DIR NEW_OUTPUT_DIR" >&2; exit 2
+    echo "Usage: $0 [--hotplug|--ic10irq|--irqack|--gpiocharge] INSTALLED_BOOT_DIR NEW_OUTPUT_DIR" >&2; exit 2
 fi
 here=$(cd "$(dirname "$0")" && pwd)
 base=$(realpath "$1")
@@ -30,10 +30,14 @@ text = menu.read_text()
 mode = sys.argv[3]
 base_name = "Battery read-only test (Samsung)' --id battery-ro"
 base_diag = "battery"
-if mode in ("ic10irq", "irqack"):
+if mode in ("ic10irq", "irqack", "gpiocharge"):
     base_name = "USB-C hotplug 12 V test (Samsung)' --id hotplug"
     base_diag = "hotplug"
-    if mode == "irqack":
+    if mode == "gpiocharge":
+        if text.count("--id irqack ") != 1:
+            sys.exit("Expected the installed IRQ acknowledgment menu")
+        title, service = "GPIO101 interrupt-driven charge", "np545-gpiocharge"
+    elif mode == "irqack":
         if text.count("--id ic10irq ") != 1:
             sys.exit("Expected the installed read-only IC10 IRQ trace menu")
         title, service = "IC10 IRQ clear and retrigger", "np545-irq-ack"
@@ -55,6 +59,9 @@ if base_diag == "hotplug" and entries[0].count("np545.hotplug=1 systemd.wants=np
 trial = entries[0].replace(base_name, f"{title} (Samsung)' --id {mode}")
 trial = trial.replace(f'set diag_entry=Debian-{base_diag}', f'set diag_entry=Debian-{mode}')
 trial = trial.replace('np545.battery=1', f'np545.battery=1 np545.{mode}=1 systemd.wants={service}.service')
+if mode == "gpiocharge":
+    trial = trial.replace(" np545.hotplug=1 systemd.wants=np545-pd-hotplug.service", "")
+    trial = trial.replace(" systemd.wants=np545-charge-observe.service", "")
 with menu.open('a') as out:
     out.write(trial + '\n')
     out.write("""

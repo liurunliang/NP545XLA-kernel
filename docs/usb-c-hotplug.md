@@ -108,3 +108,13 @@ GPIO101 共收到 11 次下降沿，连续序号 1–11；11 次发送清除命�
 停止监听时 GPIO101 保持高电平，内核 IRQ 增量为 11，与编号连续的 11 个下降沿一致。确认 GPIO101 已释放、充电设定回读为 0 mA、受电开关已关闭，六个一次性引导标记均为零。修正版日志位于构建机的 `output/irqack/ack.jsonl`、`hotplug.jsonl`、`samples.jsonl` 和 `proof.txt`。
 
 正常重启回默认 Adreno 日用项（启动 ID `0ec741ea-2984-4fff-b541-489a1c577468`），同一 USB 根分区正常挂载，LightDM 活动，六个测试服务均为 inactive。记录见 `output/irqack/return.txt` 和 `output/irqack/daily-confirmed.txt`。
+
+## GPIO101 中断驱动的热插项
+
+**GPIO101 interrupt-driven charge (Samsung)** 是单独的 GRUB 入口。选择此项时由一个服务独占 GPIO101，并串行处理状态快照、清中断、选档、受电开关和充电。带电启动时先核对原口、原电源的 12 V / 3 A 档位和 BQ 输入；随后同时阻塞等待 GPIO 输入事件和关机信号。空闲等待不设超时，开盖保持接入和拔线后等待再插入均不定时访问 IC10。
+
+每次下降沿沿用已验证的 S2MM005 清除流程，双读确认脱离状态，并核对电池转为放电后才接受下一次插入。重新接入时，根据 GPIO 事件和实际 PD 请求确认 5 V 与 12 V；协商过程中设置一次 10 秒的截止时间以处理合并或丢失的就绪指示。恢复后复用已验证的输入限流、电池保护和约 45 秒刷新；充电期间的一秒保护检查仍然有效，新的拔线中断也能提前结束等待并停充。
+
+此项保留五秒一次的独立电池电量计采样。原半秒热插轮询和两秒一次的 PD 诊断采样均未在启动参数中启用。使用 `journalctl -b -t np545-gpiocharge -o cat` 查看 GPIO 和控制事件，使用 `journalctl -b -t np545-battery -o cat` 对照实际电流与容量。关机信号与 GPIO 事件使用同一个阻塞等待，因此空闲时退出也不需要定时唤醒。
+
+重建测试包使用 `src/build-debian-battery.sh "$work/obj" "$work/artifacts" output/gpiocharge`，追加菜单使用 `src/build-keepcharge-boot.sh --gpiocharge output/irqack/boot output/gpiocharge/boot`。依次安装生成的热插、GPIO 观测、IRQ 确认和事件驱动四个包，运行 `sudo systemctl daemon-reload` 和 `sudo bash install-daily-boot.sh --battery-gpiocharge boot manifest.txt`。

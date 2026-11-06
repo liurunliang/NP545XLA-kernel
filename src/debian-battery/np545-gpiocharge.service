@@ -1,0 +1,13 @@
+[Unit]
+Description=Recover IC10 charging on GPIO101 interrupts
+ConditionKernelCommandLine=np545.gpiocharge=1
+ConditionKernelCommandLine=np545.battery=1
+ConditionKernelCommandLine=!np545.hotplug=1
+Conflicts=np545-pd-hotplug.service np545-charge-keepalive.service np545-irq-ack.service np545-ic10-irq.service np545-charge-observe.service sleep.target
+After=systemd-modules-load.service
+Before=sleep.target
+
+[Service]
+ExecStart=/usr/lib/np545xla-power/gpio_charge.py
+SyslogIdentifier=np545-gpiocharge
+TimeoutStopSec=12
