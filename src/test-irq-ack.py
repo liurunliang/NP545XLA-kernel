@@ -3,7 +3,8 @@
 import errno
 import fcntl
 import os
-from tempfile import NamedTemporaryFile
+from pathlib import Path
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 
@@ -54,6 +55,20 @@ class AckTests(unittest.TestCase):
         with self.assertRaises(OSError):
             ack.acknowledge(self.chip, self.line, 1)
         self.send.assert_not_called()
+
+    def test_publish_only_a_twice_observed_detach(self):
+        for final, saved in [(0x08ff4400, True), (0x19ff2415, False)]:
+            with self.subTest(final=final), TemporaryDirectory() as tmp:
+                stamp = Path(tmp) / "detached"
+                self.chip.word.side_effect = [0x08ff1100, 0xa0, final]
+                self.line.get_value.side_effect = [Value.INACTIVE, Value.INACTIVE, Value.ACTIVE]
+                with patch.object(ack, "ACK_DETACH", stamp):
+                    ack.acknowledge(self.chip, self.line, 2)
+                self.assertEqual(stamp.exists(), saved)
+                if saved:
+                    timestamp, state = map(int, stamp.read_text().split())
+                    self.assertEqual(state, 0x08ff1100)
+                    self.assertEqual(timestamp, self.log.call_args.kwargs['write_start_ns'])
 
     def test_stuck_low_does_not_repeat_write(self):
         self.line.get_value.side_effect = None
