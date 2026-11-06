@@ -64,9 +64,14 @@ def target(pd, battery, chip, expected):
             or chip.word(0x22) != 0x3c00 or chip.word(0x3f) != 0x3c00
             or chip.word(0x14) != expected):
         raise StopCharge("charger settings changed or charging has stopped")
+    return pack_target(battery)
+
+
+def pack_target(battery, *, starting=False):
     flags = battery["flags"]
     # SBS initialized, no alarms or error, neither full nor discharging.
-    if not flags & 0x80 or flags & 0xdb6f:
+    blocked = 0xdb2f if starting else 0xdb6f
+    if not flags & 0x80 or flags & blocked:
         raise StopCharge(f"pack status {flags:#06x}")
     if not 50 <= battery["temp"] <= 400 or not 0 <= battery["capacity"] < 100:
         raise StopCharge("pack temperature or state of charge out of range")
@@ -74,7 +79,7 @@ def target(pd, battery, chip, expected):
             and 6000000 <= battery["voltage_now"] <= FIRMWARE_MV * 1000):
         raise StopCharge("pack voltage or requested voltage out of range")
     request = battery["constant_charge_current_max"]
-    if not 64000 <= request <= 65534000 or battery["current_now"] <= 0:
+    if not 64000 <= request <= 65534000 or (not starting and battery["current_now"] <= 0):
         raise StopCharge("pack has stopped requesting or accepting charge")
     return min(CAP_MA, request // 1000) // 64 * 64
 

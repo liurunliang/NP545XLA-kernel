@@ -10,13 +10,15 @@ from unittest.mock import Mock, patch
 
 src = Path(__file__).resolve().parent
 for name, path in (("np545_charge_observe", src / "probe-debian-charge.py"),
-                   ("keepcharge", src / "debian-battery/keepcharge.py")):
+                   ("keepcharge", src / "debian-battery/keepcharge.py"),
+                   ("hotplug", src / "debian-battery/hotplug.py")):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
 
 import keepcharge as kc
+import hotplug as hp
 
 
 class KeepaliveTests(unittest.TestCase):
@@ -132,6 +134,65 @@ class KeepaliveTests(unittest.TestCase):
                     regs[0x14] = 3776
                     with patch.object(kc, "port", return_value=self.pd), self.assertRaises(FileExistsError):
                         kc.run()
+
+class HotplugTests(unittest.TestCase):
+    # The same physical source sends an extra PPS object after reconnection.
+    five = dict(requested_mV=5000, requested_mA=3000, selected_pdo=1, state_hex="19ff2415",
+                caps_hex="a16f00002c91010a2cd102002cc103002cb104002c4106003c21a4c900000000")
+    twelve = dict(five, requested_mV=12000, selected_pdo=3,
+                  caps_hex="615100002c91010a2cd102002cc103002cb104002c4106000000000000000000")
+
+    def test_select_only_live_fixed_board_profile(self):
+        known = hp.profile(self.twelve)
+        self.assertEqual(hp.profile(self.five), known)
+        sink = hp.Sink.__new__(hp.Sink)
+        sink.word = {0x20: 0x19ff2415, 0x60: 0xa0}.__getitem__
+        with patch.object(hp, "port", return_value=self.five), patch.object(hp, "send") as send:
+            sink.select(known)
+            self.assertEqual([args[0][1].hex() for args in send.call_args_list],
+                             ["0010030303", "0010030213"])
+        for pd, lp in [(dict(self.five, requested_mV=None), 0xa0),
+                       (dict(self.five, state_hex="39ff2415"), 0xa0),
+                       (dict(self.five, caps_hex="00"*32), 0xa0), (self.five, 0xa8),
+                       (self.five, 0xe0), (self.five, 0)]:
+            sink.word = {0x20: 0x19ff2415, 0x60: lp}.__getitem__
+            with patch.object(hp, "port", return_value=pd), patch.object(hp, "send") as send:
+                with self.assertRaises(hp.StopCharge):
+                    sink.select(known)
+                send.assert_not_called()
+
+    def test_no_implicit_input_or_charge(self):
+        sink, chip = Mock(), Mock()
+        known = hp.profile(self.twelve)
+        battery = dict(flags=0xc0, capacity=93, temp=301, voltage_now=8450000,
+                       constant_charge_voltage_max=8860000, constant_charge_current_max=4256000,
+                       current_now=-810000)
+        self.assertEqual(hp.pack_target(battery, starting=True), 1024)
+        with self.assertRaises(hp.StopCharge):
+            hp.pack_target(battery)
+        for flags in (0x20, 0xa0, 0x4080, 0x1080, 0x81):
+            with self.assertRaises(hp.StopCharge):
+                hp.pack_target(dict(battery, flags=flags), starting=True)
+        with patch.object(hp, "pack", return_value=battery), patch.object(hp, "log"):
+            sink.switches.return_value = 0
+            chip.input_present.return_value = True
+            with self.assertRaisesRegex(hp.StopCharge, "different path"):
+                hp.charge_after_replug(sink, chip, known)
+            chip.set_current.assert_not_called()
+            sink.consumer.assert_not_called()
+            chip.input_present.return_value = False
+            with patch.object(hp, "wait_for", side_effect=hp.StopCharge("no AC")), patch.object(
+                    hp, "poll_port", return_value=dict(attached=True, source=False)):
+                with self.assertRaisesRegex(hp.StopCharge, "no AC"):
+                    hp.charge_after_replug(sink, chip, known)
+            self.assertEqual([x.args for x in sink.consumer.call_args_list], [(True,), (False,)])
+            chip.set_current.assert_not_called()
+
+    def test_disconnect_requires_real_state(self):
+        self.assertFalse(hp.is_detached({}))
+        self.assertFalse(hp.is_detached(dict(stable_state=False)))
+        self.assertFalse(hp.is_detached(dict(stable_state=True, pd_state=21, attached=True, source=False)))
+        self.assertTrue(hp.is_detached(dict(stable_state=True, pd_state=0, attached=False, source=False)))
 
 
 if __name__ == "__main__":

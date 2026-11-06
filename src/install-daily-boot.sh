@@ -10,7 +10,7 @@ battery_trial=
 if [[ ${1:-} == --adreno && $# == 4 ]]; then
     trial=$(realpath "$2")
     set -- "$3" "$4" "$trial/BOOTAA64.EFI"
-elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera || $1 == --battery || $1 == --battery-diag || $1 == --battery-keepalive ) ]]; then
+elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera || $1 == --battery || $1 == --battery-diag || $1 == --battery-keepalive || $1 == --battery-hotplug ) ]]; then
     lid_mode=$1
     lid_trial=$(realpath "$2")
     trial_dt=lid.dtb
@@ -18,7 +18,7 @@ elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera || $1 == 
     if [[ $lid_mode == --battery* ]]; then trial_dt=battery.dtb; battery_trial=1; fi
     set -- "$3" "$lid_trial/$trial_dt" "$lid_trial/BOOTAA64.EFI"
 fi
-[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt | --camera CAMERA_DIR manifest.txt | --battery BATTERY_DIR manifest.txt | --battery-diag UPDATED_BATTERY_DIR manifest.txt | --battery-keepalive KEEPALIVE_DIR manifest.txt"
+[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt | --camera CAMERA_DIR manifest.txt | --battery BATTERY_DIR manifest.txt | --battery-diag UPDATED_BATTERY_DIR manifest.txt | --battery-keepalive KEEPALIVE_DIR manifest.txt | --battery-hotplug HOTPLUG_DIR manifest.txt"
 manifest=$(realpath "$1")
 dt=$(realpath "$2")
 efi=$(realpath "$3")
@@ -115,7 +115,7 @@ if [[ -n $lid_trial ]]; then
         modinfo -n np545_battery >/dev/null || die 'Install the read-only battery package first'
         [[ -x /usr/bin/np545xla-battery-sample && -s /usr/lib/systemd/system/np545-battery-sample.service ]] ||
             die 'Missing battery recorder'
-        if [[ $lid_mode == --battery-diag || $lid_mode == --battery-keepalive ]]; then
+        if [[ $lid_mode != --battery ]]; then
             [[ -x /usr/bin/np545xla-charge-observe && -s /usr/lib/systemd/system/np545-charge-observe.service ]] ||
                 die 'Missing read-only PD and charger observer'
             for port in /soc@0/geniqup@ac0000/i2c@a84000 /soc@0/geniqup@cc0000/i2c@c84000; do
@@ -123,7 +123,11 @@ if [[ -n $lid_trial ]]; then
                     die 'Unexpected PD bus or bound child'
             done
         fi
-        if [[ $lid_mode == --battery-keepalive ]]; then
+        if [[ $lid_mode == --battery-hotplug ]]; then
+            [[ -x /usr/lib/np545xla-power/hotplug.py && -s /usr/lib/systemd/system/np545-pd-hotplug.service ]] ||
+                die 'Install the hotplug test package first'
+        fi
+        if [[ $lid_mode == --battery-keepalive || $lid_mode == --battery-hotplug ]]; then
             [[ -x /usr/lib/np545xla-power/keepcharge.py && -s /usr/lib/systemd/system/np545-charge-keepalive.service ]] ||
                 die 'Install the charge keepalive trial package first'
         fi

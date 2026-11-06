@@ -1,0 +1,13 @@
+[Unit]
+Description=Recover the Samsung IC10 12 V sink contract on a physical replug
+ConditionKernelCommandLine=np545.hotplug=1
+ConditionKernelCommandLine=np545.battery=1
+ConditionKernelCommandLine=!np545.keepcharge=1
+Conflicts=np545-charge-keepalive.service sleep.target
+Before=sleep.target
+After=systemd-modules-load.service
+
+[Service]
+ExecStart=/usr/lib/np545xla-power/hotplug.py
+SyslogIdentifier=np545-hotplug
+TimeoutStopSec=12

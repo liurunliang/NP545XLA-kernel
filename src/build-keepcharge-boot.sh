@@ -2,8 +2,10 @@
 # Append one opt-in entry to the installed battery diagnostic menu.
 set -euo pipefail
 export LC_ALL=C
+mode=keepcharge
+if [[ ${1:-} == --hotplug ]]; then mode=hotplug; shift; fi
 if [[ $# != 2 || -e $2 || -L $2 ]]; then
-    echo "Usage: $0 CHARGE_DIAG_BOOT_DIR NEW_OUTPUT_DIR" >&2; exit 2
+    echo "Usage: $0 [--hotplug] INSTALLED_BOOT_DIR NEW_OUTPUT_DIR" >&2; exit 2
 fi
 here=$(cd "$(dirname "$0")" && pwd)
 base=$(realpath "$1")
@@ -16,7 +18,7 @@ sha() { sha256sum < "$1" | cut -d' ' -f1; }
 read -r bundle _ daily overlay < "$base/base.txt"
 cp "$base/battery.dtb" "$stage/"
 python3 "$here/read-grub-menu.py" "$base/BOOTAA64.EFI" > "$stage/menu"
-python3 - "$stage/menu" "$(sha "$stage/battery.dtb")" <<'PY'
+python3 - "$stage/menu" "$(sha "$stage/battery.dtb")" "$mode" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -24,14 +26,21 @@ import sys
 menu = Path(sys.argv[1])
 text = menu.read_text()
 entries = re.findall(r"\nmenuentry 'Debian 13 - Battery read-only test \(Samsung\)' --id battery-ro \{.*?\n\}", text, re.S)
-if (len(entries) != 1 or 'np545.keepcharge' in text or '--id keepcharge' in text
+mode = sys.argv[3]
+if mode == "hotplug":
+    title, flag, service = "USB-C hotplug 12 V test", "hotplug", "np545-pd-hotplug"
+    if text.count("--id keepcharge ") != 1:
+        sys.exit("Expected the installed BQ25710 keepalive menu")
+else:
+    title, flag, service = "BQ25710 charge keepalive test", "keepcharge", "np545-charge-keepalive"
+if (len(entries) != 1 or f'np545.{flag}=1' in text or f'--id {mode} ' in text
         or f'devicetree /boot/battery-{sys.argv[2]}.dtb' not in entries[0]
         or entries[0].count('systemd.wants=np545-charge-observe.service') != 1):
     sys.exit('Expected the installed read-only charge diagnostic entry')
 trial = entries[0].replace("Battery read-only test (Samsung)' --id battery-ro",
-                           "BQ25710 charge keepalive test (Samsung)' --id keepcharge")
-trial = trial.replace('set diag_entry=Debian-battery','set diag_entry=Debian-keepcharge')
-trial = trial.replace('np545.battery=1', 'np545.battery=1 np545.keepcharge=1 systemd.wants=np545-charge-keepalive.service')
+                           f"{title} (Samsung)' --id {mode}")
+trial = trial.replace('set diag_entry=Debian-battery', f'set diag_entry=Debian-{mode}')
+trial = trial.replace('np545.battery=1', f'np545.battery=1 np545.{flag}=1 systemd.wants={service}.service')
 with menu.open('a') as out:
     out.write(trial + '\n')
     out.write("""
@@ -43,7 +52,7 @@ if search --no-floppy --file --set=keepcharge_esp /boot/np545-keepcharge.env; th
         if save_env --file "$keepcharge_env" np545_keepcharge_once; then set default=keepcharge; fi
     fi
 fi
-""")
+""".replace("keepcharge", mode))
 PY
 bash "$here/build-daily-efi.sh" --config-ext4-once "$stage/menu" "$stage/BOOTAA64.EFI"
 python3 "$here/read-grub-menu.py" "$stage/BOOTAA64.EFI" | cmp - "$stage/menu"

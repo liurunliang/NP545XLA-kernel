@@ -36,6 +36,8 @@ def adapter(label):
 
 
 class Registers:
+    pd_regs = PD_REGS
+    bq_regs = BQ_REGS
     open_flags = os.O_RDONLY
 
     def __init__(self, label, address):
@@ -58,7 +60,7 @@ class Registers:
 
     def read(self, register):
         pd = self.address == 0x33
-        length = (PD_REGS if pd else BQ_REGS)[register]
+        length = (self.pd_regs if pd else self.bq_regs)[register]
         index = register.to_bytes(2 if pd else 1, "big")
         select = (C.c_uint8 * len(index)).from_buffer_copy(index)
         data = (C.c_uint8 * length)()

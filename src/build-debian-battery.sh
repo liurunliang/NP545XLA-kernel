@@ -32,7 +32,7 @@ install -Dm644 "$here/debian-battery/np545-charge-observe.service" "$pkg/usr/lib
 mkdir -p "$pkg/DEBIAN"
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: np545xla-battery-ro
-Version: $release-4
+Version: $release-5
 Architecture: arm64
 Maintainer: NP545XLA Linux contributors <root@localhost>
 Depends: kmod, python3
@@ -42,7 +42,7 @@ for name in postinst postrm; do
     printf '#!/bin/sh\nset -e\nif [ -d /lib/modules/%s ]; then depmod -a %s; fi\n' "$release" "$release" > "$pkg/DEBIAN/$name"
     chmod +x "$pkg/DEBIAN/$name"
 done
-dpkg-deb --root-owner-group --build "$pkg" "$out/np545xla-battery-ro_${release}-4_arm64.deb"
+dpkg-deb --root-owner-group --build "$pkg" "$out/np545xla-battery-ro_${release}-5_arm64.deb"
 
 # The writer is an independent package with no enablement in the default target.
 trial=$stage/trial
@@ -51,10 +51,24 @@ install -Dm644 "$here/debian-battery/np545-charge-keepalive.service" "$trial/usr
 mkdir -p "$trial/DEBIAN"
 cat > "$trial/DEBIAN/control" <<CONTROL
 Package: np545xla-charge-keepalive
+Version: $release-2
+Architecture: arm64
+Maintainer: NP545XLA Linux contributors <root@localhost>
+Depends: np545xla-battery-ro (= $release-5)
+Description: Current refresh for the optional Samsung active charge trial
+CONTROL
+dpkg-deb --root-owner-group --build "$trial" "$out/np545xla-charge-keepalive_${release}-2_arm64.deb"
+
+hotplug=$stage/hotplug
+install -Dm755 "$here/debian-battery/hotplug.py" "$hotplug/$powerlib/hotplug.py"
+install -Dm644 "$here/debian-battery/np545-pd-hotplug.service" "$hotplug/usr/lib/systemd/system/np545-pd-hotplug.service"
+mkdir -p "$hotplug/DEBIAN"
+cat > "$hotplug/DEBIAN/control" <<CONTROL
+Package: np545xla-pd-hotplug
 Version: $release-1
 Architecture: arm64
 Maintainer: NP545XLA Linux contributors <root@localhost>
-Depends: np545xla-battery-ro (= $release-4)
-Description: Current refresh for the optional Samsung active charge trial
+Depends: np545xla-charge-keepalive (= $release-2)
+Description: Samsung IC10 USB-C sink reconnect trial
 CONTROL
-dpkg-deb --root-owner-group --build "$trial" "$out/np545xla-charge-keepalive_${release}-1_arm64.deb"
+dpkg-deb --root-owner-group --build "$hotplug" "$out/np545xla-pd-hotplug_${release}-1_arm64.deb"
