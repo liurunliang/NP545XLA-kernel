@@ -11,7 +11,7 @@
 	bt_enable_pin: bt-enable-state {
 		pins = "gpio170";
 		function = "gpio";
-		bias-disable;
+		bias-pull-down;
 		drive-strength = <2>;
 	};
 };
