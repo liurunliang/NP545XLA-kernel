@@ -188,6 +188,43 @@ class HotplugTests(unittest.TestCase):
             self.assertEqual([x.args for x in sink.consumer.call_args_list], [(True,), (False,)])
             chip.set_current.assert_not_called()
 
+    def test_recovered_current_window_and_stop(self):
+        for begins_charging in (True, False):
+            sink, chip = Mock(), Mock()
+            chip.input_present.return_value = True
+            sink.switches.return_value = 1
+            now = [0]
+            stop = hp.stopping.__class__()
+            connected = dict(stable_state=True, pd_state=21, attached=True, source=False)
+            writes = []
+            chip.set_current.side_effect = lambda ma: writes.append((now[0], ma))
+
+            def tick(seconds):
+                now[0] += seconds
+                if now[0] >= 181:
+                    stop.set()
+
+            def pack():
+                positive = begins_charging and now[0] > 1
+                return dict(current_now=900000 if positive else -50000,
+                            flags=0x80 if positive else 0xc0, capacity=95,
+                            temp=300, voltage_now=8593000, constant_charge_voltage_max=8860000,
+                            constant_charge_current_max=4256000)
+
+            with self.subTest(begins_charging=begins_charging), ExitStack() as stack:
+                for name, value in dict(stopping=stop, pack=pack, uptime=lambda: now[0],
+                                        poll_port=lambda: connected, log=Mock()).items():
+                    stack.enter_context(patch.object(hp, name, value))
+                stack.enter_context(patch.object(stop, "wait", tick))
+                if begins_charging:
+                    hp.charge_after_replug(sink, chip, hp.profile(self.twelve))
+                    self.assertEqual(writes, [(0, 1024), (45, 1024), (90, 1024), (135, 1024),
+                                              (180, 1024), (181, 0)])
+                else:
+                    with self.assertRaisesRegex(hp.StopCharge, "did not begin"):
+                        hp.charge_after_replug(sink, chip, hp.profile(self.twelve))
+                    self.assertEqual(writes, [(0, 1024), (10, 0)])
+
     def test_disconnect_requires_real_state(self):
         self.assertFalse(hp.is_detached({}))
         self.assertFalse(hp.is_detached(dict(stable_state=False)))
