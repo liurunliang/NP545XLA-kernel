@@ -58,10 +58,13 @@ def main():
             now = time.monotonic()
             # Repeated samples while closed distinguish early resume from opening the lid.
             if current != prev or (current["gpio"] == "low" and now >= heartbeat):
+                details = {}
                 if wake_registers.is_file():
-                    emit(**current, pdc=wake_registers.read_text().strip())
-                else:
-                    emit(**current)
+                    try:
+                        details["pdc"] = wake_registers.read_text().strip()
+                    except OSError as exc:
+                        details["pdc_error"] = str(exc)
+                emit(**current, **details)
                 prev, heartbeat = current, now + 2
             if select.select([device], [], [], min(.4, left))[0]:
                 sec, usec, kind, code, value = record.unpack(device.read(record.size))
