@@ -1,0 +1,34 @@
+Samsung NP545XLA GPIO50 loses the falling edge after s2idle while its
+rising edge still reaches Linux. Enable single-edge emulation on this
+board's lid input only. SC7180's upstream workaround is c3c0c2e18d94;
+3a3a100473d2 used it for a similar missing lid edge on the SDM845 C630.
+The SC8180x PDC IP revision responsible has not been established.
+
+--- a/drivers/pinctrl/qcom/pinctrl-msm.c
++++ b/drivers/pinctrl/qcom/pinctrl-msm.c
+@@ -1009,9 +1009,22 @@ static bool msm_gpio_needs_dual_edge_parent_workaround(struct irq_data *d,
+ 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
+ 	struct msm_pinctrl *pctrl = gpiochip_get_data(gc);
+ 
+-	return type == IRQ_TYPE_EDGE_BOTH &&
+-	       pctrl->soc->wakeirq_dual_edge_errata && d->parent_data &&
+-	       test_bit(d->hwirq, pctrl->skip_wake_irqs);
++	if (type != IRQ_TYPE_EDGE_BOTH || !d->parent_data ||
++	    !test_bit(d->hwirq, pctrl->skip_wake_irqs))
++		return false;
++
++	if (pctrl->soc->wakeirq_dual_edge_errata)
++		return true;
++
++	/* Only this board's lid has been observed to miss a falling edge. */
++	if (d->hwirq == 50 &&
++	    of_device_is_compatible(pctrl->dev->of_node, "qcom,sc8180x-tlmm") &&
++	    of_machine_is_compatible("samsung,np545xla")) {
++		dev_info_once(pctrl->dev, "NP545XLA lid GPIO50: alternating PDC edges\n");
++		return true;
++	}
++
++	return false;
+ }
+ 
+ static void msm_gpio_irq_init_valid_mask(struct gpio_chip *gc,
