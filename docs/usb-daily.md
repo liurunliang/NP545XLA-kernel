@@ -141,6 +141,10 @@ src/build-lid-boot.sh output/debian-final/manifest.txt output/adreno/default-men
 
 在已安装旧版的三星上升级时，保持盖子打开，先用 `sudo systemctl stop np545xla-sleep-backlight.service` 停止旧服务，确认 `/sys/module/np545_sleep_backlight` 已消失，再校验并安装新版 deb。随后启动同名服务。包保留原来的开机启用状态。降级可以按相同顺序安装已保存的 `7.0.0-1` 包。停用当前版本时，停止服务会先解除盖子控制并恢复保存的亮度，再卸载模块。
 
+2026-11-06 的三轮实机测试中，每次合盖后驱动均写入并读回占空值 0，开盖后均恢复到原值 256。现场观察三轮均正常。第一、三轮分别在内核进入 `s2idle` 前 0.658 秒和 0.651 秒就已将背光清零。第二轮在刚唤醒约 3.6 秒后再次合盖；logind 未发出挂起请求，内核也没有进入睡眠，背光仍熄灭了 3.232 秒并在开盖时恢复。成功睡眠计数由 7 增至 9，失败计数保持 0。原 Xfce Wayland 会话继续运行，logind 的等待设置仍为 30 秒。
+
+试验记录见 `output/daily/instant-lid/physical/acceptance.txt`、`kernel.txt` 和 `logind.jsonl`。限时输入采样在现场操作前已结束；上述时间比较使用同一份内核日志的 PWM 读回和睡眠入口，无法据此给出从物理开合到光学亮度变化的精确毫秒数。
+
 ## 启动探测日志
 
 这台机器的键盘异常报告可在一秒内覆盖原来的内核缓冲区。日用入口将缓冲区设为 16 MiB。在三星 Debian 上安装限时记录服务并启用，下一次该入口开机时，前三分钟的驱动探测信息会保存到内存中的 `/run/np545xla-daily-probe.log`。
