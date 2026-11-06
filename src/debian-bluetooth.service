@@ -1,0 +1,12 @@
+[Unit]
+Description=Load QCA6390 Bluetooth on the NP545XLA Bluetooth trial
+ConditionKernelCommandLine=np545.bluetooth=1
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/modprobe -d /usr/lib/np545xla-bluetooth ecdh_generic
+ExecStart=/usr/sbin/modprobe -d /usr/lib/np545xla-bluetooth cmac
+ExecStart=/usr/sbin/modprobe -d /usr/lib/np545xla-bluetooth pwrseq_qcom_wcn
+ExecStart=/usr/sbin/modprobe -d /usr/lib/np545xla-bluetooth hci_uart
+RemainAfterExit=yes

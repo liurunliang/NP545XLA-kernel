@@ -11,16 +11,17 @@ latest=
 if [[ ${1:-} == --adreno && $# == 4 ]]; then
     trial=$(realpath "$2")
     set -- "$3" "$4" "$trial/BOOTAA64.EFI"
-elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera || $1 == --battery || $1 == --battery-diag || $1 == --battery-keepalive || $1 == --battery-hotplug || $1 == --battery-ic10irq || $1 == --battery-irqack || $1 == --battery-gpiocharge || $1 == --latest ) ]]; then
+elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera || $1 == --bluetooth || $1 == --battery || $1 == --battery-diag || $1 == --battery-keepalive || $1 == --battery-hotplug || $1 == --battery-ic10irq || $1 == --battery-irqack || $1 == --battery-gpiocharge || $1 == --latest ) ]]; then
     lid_mode=$1
     if [[ $lid_mode == --latest ]]; then lid_mode=--battery-gpiocharge; latest=1; fi
     lid_trial=$(realpath "$2")
     trial_dt=lid.dtb
     if [[ $lid_mode == --camera ]]; then trial_dt=camera.dtb; fi
+    if [[ $lid_mode == --bluetooth ]]; then trial_dt=bluetooth.dtb; fi
     if [[ $lid_mode == --battery* ]]; then trial_dt=battery.dtb; battery_trial=1; fi
     set -- "$3" "$lid_trial/$trial_dt" "$lid_trial/BOOTAA64.EFI"
 fi
-[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt | --camera CAMERA_DIR manifest.txt | --battery BATTERY_DIR manifest.txt | --battery-diag UPDATED_BATTERY_DIR manifest.txt | --battery-keepalive KEEPALIVE_DIR manifest.txt | --battery-hotplug HOTPLUG_DIR manifest.txt | --battery-ic10irq IRQ_DIR manifest.txt | --battery-irqack ACK_DIR manifest.txt | --battery-gpiocharge GPIO_DIR manifest.txt | --latest LATEST_DIR manifest.txt"
+[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt | --camera CAMERA_DIR manifest.txt | --bluetooth BLUETOOTH_DIR manifest.txt | --battery BATTERY_DIR manifest.txt | --battery-diag UPDATED_BATTERY_DIR manifest.txt | --battery-keepalive KEEPALIVE_DIR manifest.txt | --battery-hotplug HOTPLUG_DIR manifest.txt | --battery-ic10irq IRQ_DIR manifest.txt | --battery-irqack ACK_DIR manifest.txt | --battery-gpiocharge GPIO_DIR manifest.txt | --latest LATEST_DIR manifest.txt"
 manifest=$(realpath "$1")
 dt=$(realpath "$2")
 efi=$(realpath "$3")
@@ -42,6 +43,7 @@ fi
 if [[ -n $lid_trial ]]; then
     names=$'BOOTAA64.EFI\nlid.dtb\nbase.txt'
     if [[ $lid_mode == --camera ]]; then names=$'BOOTAA64.EFI\ncamera.dtb\nbase.txt'; fi
+    if [[ $lid_mode == --bluetooth ]]; then names=$'BOOTAA64.EFI\nbluetooth.dtb\nbase.txt'; fi
     if [[ -n $battery_trial ]]; then names=$'BOOTAA64.EFI\nbattery.dtb\nbase.txt'; fi
     if [[ $lid_mode == --lid-edge ]]; then names+=$'\nImage\nImage.sum'; fi
     [[ $(awk '{print $2}' "$lid_trial/SHA256SUMS") == "$names" ]] || die 'Invalid lid package'
@@ -107,6 +109,15 @@ if [[ -n $lid_trial ]]; then
             die 'Install the matching np545xla-camera package first'
         [[ -s /usr/lib/systemd/system/np545xla-camera.service && -x /usr/bin/np545xla-camera-test ]] ||
             die 'Missing camera service or capture test'
+    elif [[ $lid_mode == --bluetooth ]]; then
+        target="$boot/bluetooth-$lid_digest.dtb"
+        uart=/soc@0/geniqup@cc0000/serial@c8c000
+        tlmm=$(fdtget -t u "$dt" /soc@0/pinctrl@3100000 phandle)
+        [[ $(fdtget "$dt" "$uart" status) == okay &&
+           $(fdtget "$dt" "$uart/bluetooth" compatible) == qcom,qca6390-bt &&
+           $(fdtget -t u "$dt" /qca6390-pmu bt-enable-gpios) == "$tlmm 170 0" ]] || die 'Wrong Bluetooth DT'
+        for m in pwrseq_qcom_wcn hci_uart; do modprobe -d /usr/lib/np545xla-bluetooth --show-depends "$m" >/dev/null; done
+        [[ -s /usr/lib/systemd/system/np545-bluetooth.service ]] || die 'Install Bluetooth trial modules first'
     elif [[ -n $battery_trial ]]; then
         bus=/soc@0/geniqup@cc0000/i2c@c88000
         target="$boot/battery-$lid_digest.dtb"
@@ -146,7 +157,7 @@ if [[ -n $lid_trial ]]; then
                 die 'Install the charge keepalive trial package first'
         fi
     fi
-    if [[ $lid_mode == --camera || -n $battery_trial ]]; then
+    if [[ $lid_mode == --camera || $lid_mode == --bluetooth || -n $battery_trial ]]; then
         backup="$loader.pre-${lid_mode#--}"
         if [[ -n $latest ]]; then backup="$loader.pre-latest"; fi
         if [[ ! -e $backup ]]; then
@@ -185,7 +196,9 @@ if [[ -n $lid_trial ]]; then
     install_verified "$dt" "$target"
     install_verified "$efi" "$loader"
     sha256sum "$loader" "$target" "$current" "$boot/adreno-$base_overlay.cpio.gz"
-    if [[ -n $latest ]]; then
+    if [[ $lid_mode == --bluetooth ]]; then
+        echo "Installed independent Bluetooth entry alongside the Latest desktop."
+    elif [[ -n $latest ]]; then
         echo "Installed the verified GPIO101 entry as the default Samsung desktop."
     else
         echo "Installed the optional ${lid_mode#--} menu entry. The default is the verified Adreno desktop."

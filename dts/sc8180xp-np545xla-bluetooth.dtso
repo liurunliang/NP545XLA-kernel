@@ -1,0 +1,83 @@
+/dts-v1/;
+/plugin/;
+
+/* UR18/SE3 on this board. Pin roles follow the SC8180x GENI UART. */
+&tlmm {
+	bt_uart_pins: bt-uart-state {
+		cts-pins { pins = "gpio43"; function = "qup13"; bias-pull-down; };
+		rts-tx-pins { pins = "gpio44", "gpio45"; function = "qup13"; drive-strength = <2>; bias-disable; };
+		rx-pins { pins = "gpio46"; function = "qup13"; bias-pull-up; };
+	};
+	bt_enable_pin: bt-enable-state {
+		pins = "gpio170";
+		function = "gpio";
+		bias-disable;
+		drive-strength = <2>;
+	};
+};
+
+&{/} {
+	/* WBRX on CLSC8180 votes S5A/S6C/S7C at these levels. The trial
+	 * retains the firmware's supply state and does not program RPMh.
+	 * WLAN GPIO169 remains owned by the existing Wi-Fi path. */
+	bt_s5a: bt-s5a-fw {
+		compatible = "regulator-fixed";
+		regulator-name = "bt-fw-s5a";
+		regulator-min-microvolt = <1950000>;
+		regulator-max-microvolt = <1950000>;
+		regulator-always-on;
+	};
+	bt_s6c: bt-s6c-fw {
+		compatible = "regulator-fixed";
+		regulator-name = "bt-fw-s6c";
+		regulator-min-microvolt = <1350000>;
+		regulator-max-microvolt = <1350000>;
+		regulator-always-on;
+	};
+	bt_s7c: bt-s7c-fw {
+		compatible = "regulator-fixed";
+		regulator-name = "bt-fw-s7c";
+		regulator-min-microvolt = <950000>;
+		regulator-max-microvolt = <950000>;
+		regulator-always-on;
+	};
+	qca6390-pmu {
+		compatible = "qcom,qca6390-pmu";
+		pinctrl-names = "default";
+		pinctrl-0 = <&bt_enable_pin>;
+		bt-enable-gpios = <&tlmm 170 0>;
+		vddio-supply = <&io_1p8>;
+		vddpmu-supply = <&bt_s7c>;
+		vddaon-supply = <&bt_s7c>;
+		vddrfa0p95-supply = <&bt_s7c>;
+		vddrfa1p3-supply = <&bt_s6c>;
+		vddpcie1p3-supply = <&bt_s6c>;
+		vddrfa1p9-supply = <&bt_s5a>;
+		vddpcie1p9-supply = <&bt_s5a>;
+		regulators {
+			bt_common: ldo0 { regulator-name = "bt-pmu-rfa-cmn"; };
+			bt_aon: ldo1 { regulator-name = "bt-pmu-aon"; };
+			bt_cmx: ldo4 { regulator-name = "bt-pmu-cmx"; };
+			bt_rf08: ldo5 { regulator-name = "bt-pmu-rfa-0p8"; };
+			bt_rf12: ldo6 { regulator-name = "bt-pmu-rfa-1p2"; };
+			bt_rf17: ldo7 { regulator-name = "bt-pmu-rfa-1p7"; };
+		};
+	};
+};
+
+&{/soc@0/geniqup@cc0000/serial@c8c000} {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&bt_uart_pins>;
+	uart-has-rtscts;
+	bluetooth {
+		compatible = "qcom,qca6390-bt";
+		max-speed = <3200000>;
+		vddrfacmn-supply = <&bt_common>;
+		vddaon-supply = <&bt_aon>;
+		vddbtcmx-supply = <&bt_cmx>;
+		vddrfa0p8-supply = <&bt_rf08>;
+		vddrfa1p2-supply = <&bt_rf12>;
+		vddrfa1p7-supply = <&bt_rf17>;
+	};
+};
