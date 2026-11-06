@@ -118,6 +118,23 @@ src/build-lid-boot.sh output/debian-final/manifest.txt output/adreno/default-men
 
 屏幕点亮时，通过现有 SPMI regmap 只读取 USID 5 的五个已知 PWM 外设。第 3 路（从 0 计数，地址 `0xbc00`）是唯一启用且频率与原厂配置一致的候选：纯 PWM 子类型 `0x0b`、9 位、585.937 Hz、占空计数 256/511、使能 `0x80`。第 2 路也启用，但频率为 18.75 kHz、占空比 100%，其余三路均未启用。只读快照为 `output/daily/backlight-diag/pwm-live.txt`。[高通纯 PWM 寄存器实现](https://android.googlesource.com/kernel/msm.git/+/android-wear-6.0.1_r0.40/drivers/pwm/pwm-qpnp.c#555)
 
+同一面板的 eDP DPCD `0x700–0x703` 实读为 `02 fb c7 00`。`0x721` 为 0，当前亮度使用外部 PWM。面板公布了 AUX 设置亮度值的能力，但背光启停使用使能引脚，未公布 AUX 启停能力。原始记录为 `output/daily/backlight-diag/aux-live.txt`。
+
+在正常桌面用一次受限试验确认了接线。内核仅将 `0xbc00` 的占空计数由 256 降到 166，保持 3 秒后恢复为 256，写入和恢复后都通过 `PWM_SYNC` 锁存并读回。频率和使能保持原值，现场看到浅色窗口明显变暗，随后恢复原亮度。记录位于 `output/daily/backlight-diag/dim-physical.txt`。
+
+睡眠背光驱动通过独立的 USB Debian 软件包提供，加载时核对本机型号、`np545.lid_edge=1` 启动参数以及该通道的实际配置。它在设备的挂起回调保存当前亮度、将占空计数置零，在恢复回调写回原值，两次都锁存并核对。PWM 输出使能和频率沿用固件设置。可在原 Debian ARM64 构建机运行 `src/build-debian-backlight.sh /var/tmp/np545xla-diag/obj /var/tmp/np545xla-diag/artifacts output/daily/suspend-backlight`。在三星上校验 `backlight.sha256` 后安装同目录的本地 deb，用 `sudo systemctl start np545xla-sleep-backlight.service` 启动；确认物理熄灯与恢复后，可用 `sudo systemctl enable np545xla-sleep-backlight.service` 随该入口启动，用 `sudo systemctl disable --now np545xla-sleep-backlight.service` 回退。
+
+实机一次开盖手动睡眠和两次合盖睡眠均记录到占空计数从 256 到 0、恢复时回到 256。现场确认睡眠时原有的面板微光消失，此服务已设为仅随 Lid edge 入口启用。两次合盖均在上次唤醒约 10–12 秒后发生。按 logind 与内核的单调时钟对齐，等待的主要部分发生在 logind 收到合盖事件之后、发出挂起请求之前。下表的“置零”以驱动写入并读回为准。光学熄灭由现场观察确认，未测量其毫秒级时刻。
+
+| 合盖时间（北京时间） | 合盖到挂起请求 | 请求到背光置零 | 合盖到置零 |
+| --- | ---: | ---: | ---: |
+| 11:37:45.804 | 17.168 秒 | 0.821 秒 | 17.989 秒 |
+| 11:38:22.401 | 15.571 秒 | 0.961 秒 | 16.532 秒 |
+
+这台三星的 logind 使用 30 秒的启动及恢复后合盖等待设置 `HoldoffTimeoutSec`，用于等待扩展坞及外接显示器枚举。先前超过该等待期的三轮测试中，合盖到挂起请求约为 40 毫秒。当前驱动在系统挂起时关灯，尚未将背光关闭独立接到合盖或显示器关闭事件。记录见 `output/daily/backlight-diag/lid-off-timing.txt` 及 `fixed-sleep-journal.txt`。[Debian logind 的等待设置](https://manpages.debian.org/trixie/systemd/logind.conf.5.en.html#HoldoffTimeoutSec=)
+
+同芯片的 Lenovo Flex 5G 和 Qualcomm Primus 分别描述盖子开关和内屏背光。eDP 面板引用 PWM 背光，DRM 关闭面板时先禁用背光；是否在合盖时请求关闭内屏仍由显示或电源策略决定。另一个可参考的做法是 ChromiumOS 的内屏控制器直接响应盖子状态，将合盖亮度设为零并保留外接屏，然后由电源管理独立处理挂起。参考板的 PWM 通道和使能引脚与三星不同。[Flex 5G](https://github.com/torvalds/linux/blob/v7.0/arch/arm64/boot/dts/qcom/sc8180x-lenovo-flex-5g.dts#L25-L46) · [Primus](https://github.com/torvalds/linux/blob/v7.0/arch/arm64/boot/dts/qcom/sc8180x-primus.dts#L28-L53) · [DRM 面板关闭顺序](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/drm_panel.c#L266-L310) · [ChromiumOS 内屏策略](https://chromium.googlesource.com/chromiumos/platform2/+/HEAD/power_manager/powerd/policy/internal_backlight_controller.cc#907)
+
 ## 启动探测日志
 
 这台机器的键盘异常报告可在一秒内覆盖原来的内核缓冲区。日用入口将缓冲区设为 16 MiB。在三星 Debian 上安装限时记录服务并启用，下一次该入口开机时，前三分钟的驱动探测信息会保存到内存中的 `/run/np545xla-daily-probe.log`。
