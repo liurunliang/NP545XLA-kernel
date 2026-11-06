@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# Run in the persistent USB Debian. Only its sibling EFI partition is updated.
+# Run from the persistent USB Debian. The edge trial also stores its kernel on the USB root.
 set -euo pipefail
 export LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin
 die() { echo "$*" >&2; exit 1; }
 trial=
 lid_trial=
+lid_mode=
 if [[ ${1:-} == --adreno && $# == 4 ]]; then
     trial=$(realpath "$2")
     set -- "$3" "$4" "$trial/BOOTAA64.EFI"
-elif [[ ${1:-} == --lid && $# == 3 ]]; then
+elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge ) ]]; then
+    lid_mode=$1
     lid_trial=$(realpath "$2")
     set -- "$3" "$lid_trial/lid.dtb" "$lid_trial/BOOTAA64.EFI"
 fi
-[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt"
+[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt"
 manifest=$(realpath "$1")
 dt=$(realpath "$2")
 efi=$(realpath "$3")
@@ -32,7 +34,9 @@ if [[ -n $trial ]]; then
     (cd /var/lib/np545xla-adreno/firmware && sha256sum --strict -c "$trial/firmware.sha256")
 fi
 if [[ -n $lid_trial ]]; then
-    [[ $(awk '{print $2}' "$lid_trial/SHA256SUMS") == $'BOOTAA64.EFI\nlid.dtb\nbase.txt' ]] || die 'Invalid lid package'
+    names=$'BOOTAA64.EFI\nlid.dtb\nbase.txt'
+    if [[ $lid_mode == --lid-edge ]]; then names+=$'\nImage\nImage.sum'; fi
+    [[ $(awk '{print $2}' "$lid_trial/SHA256SUMS") == "$names" ]] || die 'Invalid lid package'
     (cd "$lid_trial" && sha256sum --strict -c SHA256SUMS)
     read -r lid_bundle base_efi base_dt base_overlay extra < "$lid_trial/base.txt"
     [[ $lid_bundle == "$bundle" && -z $extra && $base_efi =~ ^[0-9a-f]{64}$ &&
@@ -87,10 +91,36 @@ if [[ -n $lid_trial ]]; then
     lid_digest=$(sha256sum < "$dt" | cut -d' ' -f1)
     target="$boot/lid-$lid_digest.dtb"
     [[ ! -e $target ]] || cmp -s "$dt" "$target" || die 'Conflicting content-addressed lid DT'
+    if [[ $lid_mode == --lid-edge ]]; then
+        # GRUB reads its Image from the third GPT partition on this same disk.
+        [[ $(lsblk -ndro PARTN "$rootdev") == 3 && $(lsblk -ndro PARTN "$esp") == 2 ]] ||
+            die 'Unexpected root or ESP partition number'
+        cmp "$dt" "$target" || die 'Install and verify the original lid entry first'
+        digest=$(sha256sum < "$lid_trial/Image" | cut -d' ' -f1)
+        directory=/boot/np545xla-lid-edge
+        path="$directory/Image-$digest"
+        [[ $(realpath -m "$directory") == "$directory" && $(findmnt -n -o TARGET -T /boot) == / ]] ||
+            die 'Candidate Image must be on the USB root filesystem'
+        mkdir -p "$directory"
+        [[ $(findmnt -n -o TARGET -T "$directory") == / && ! -L $path ]] || die 'Unexpected candidate Image location'
+        printf '%s  %s\n' "$digest" "$path" | cmp - "$lid_trial/Image.sum" || die 'Invalid trial Image checksum record'
+        [[ ! -e $path ]] || cmp -s "$lid_trial/Image" "$path" || die 'Conflicting content-addressed Image'
+        install_verified "$lid_trial/Image" "$path"
+        checksum="$boot/lid-edge-$digest.sum"
+        [[ ! -e $checksum ]] || cmp -s "$lid_trial/Image.sum" "$checksum" || die 'Conflicting trial checksum'
+        install_verified "$lid_trial/Image.sum" "$checksum"
+        sha256sum --strict -c "$checksum"
+        backup="$loader.pre-lid-edge"
+        if [[ ! -e $backup ]]; then
+            printf '%s  %s\n' "$base_efi" "$loader" | sha256sum --strict -c -
+            install_verified "$loader" "$backup"
+        fi
+        printf '%s  %s\n' "$base_efi" "$backup" | sha256sum --strict -c -
+    fi
     install_verified "$dt" "$target"
     install_verified "$efi" "$loader"
     sha256sum "$loader" "$target" "$current" "$boot/adreno-$base_overlay.cpio.gz"
-    echo 'Installed the optional Lid test menu entry. The default is the verified Adreno desktop.'
+    echo "Installed the optional ${lid_mode#--} menu entry. The default is the verified Adreno desktop."
     exit 0
 fi
 if [[ -n $trial ]]; then

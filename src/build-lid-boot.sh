@@ -25,26 +25,14 @@ cmp "$lid" "$stage/lid.dtb"
 sha() { sha256sum < "$1" | cut -d' ' -f1; }
 overlay=$(sha "$base/adreno.cpio.gz")
 printf '%s %s %s %s\n' "$bundle" "$(sha "$base/BOOTAA64.EFI")" "$(sha "$daily")" "$overlay" > "$stage/base.txt"
-python3 - "$base/BOOTAA64.EFI" "$bundle" "$overlay" "$(sha "$lid")" > "$stage/grub.cfg" <<'PY'
-import io
+python3 "$src/read-grub-menu.py" "$base/BOOTAA64.EFI" > "$stage/base.cfg"
+python3 - "$stage/base.cfg" "$bundle" "$overlay" "$(sha "$lid")" > "$stage/grub.cfg" <<'PY'
 import re
 import sys
-import tarfile
 from pathlib import Path
 
 path, bundle, overlay, lid_hash = sys.argv[1:]
-image = Path(path).read_bytes()
-# grub-mkstandalone embeds a ustar memdisk. Check the member type, name and header checksum.
-name = 'boot/grub/grub.cfg'
-offsets = [m.start() for m in re.finditer(re.escape(name.encode() + b'\0'), image)
-           if image[m.start() + 257:m.start() + 262] == b'ustar']
-if len(offsets) != 1:
-    sys.exit('Expected exactly one GRUB configuration member in the accepted EFI')
-with tarfile.open(fileobj=io.BytesIO(image[offsets[0]:]), mode='r:') as archive:
-    entry = archive.next()
-    if not entry or not entry.isfile() or entry.name != name:
-        sys.exit('Invalid GRUB configuration member')
-    cfg = archive.extractfile(entry).read().decode('utf-8')
+cfg = Path(path).read_text()
 required = [f'desktop_boot /boot/daily-{bundle}.dtb unified',
             'if [ "$default" = daily ]; then set default=adreno-unified; fi',
             f'initrd /boot/debian-initramfs.cpio.gz /boot/adreno-{overlay}.cpio.gz; then']
@@ -67,7 +55,7 @@ menuentry 'Debian 13 - Lid test (Samsung)' --id lid-test {{
 }}''')
 PY
 bash "$src/build-daily-efi.sh" --config "$stage/grub.cfg" "$stage/BOOTAA64.EFI"
-rm "$stage/grub.cfg"
+rm "$stage/grub.cfg" "$stage/base.cfg"
 (cd "$stage" && sha256sum BOOTAA64.EFI lid.dtb base.txt > SHA256SUMS)
 mv -nT "$stage" "$out"
 [[ ! -e $stage ]]
