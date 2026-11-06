@@ -4,7 +4,7 @@ from contextlib import ExitStack, nullcontext
 import importlib.util
 from pathlib import Path
 import sys
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, TemporaryFile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -146,6 +146,9 @@ class HotplugTests(unittest.TestCase):
         known = hp.profile(self.twelve)
         self.assertEqual(hp.profile(self.five), known)
         sink = hp.Sink.__new__(hp.Sink)
+        lock_file = TemporaryFile()
+        self.addCleanup(lock_file.close)
+        sink.fd = lock_file.fileno()
         sink.word = {0x20: 0x19ff2415, 0x60: 0xa0}.__getitem__
         with patch.object(hp, "port", return_value=self.five), patch.object(hp, "send") as send:
             sink.select(known)

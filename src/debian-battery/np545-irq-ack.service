@@ -1,0 +1,12 @@
+[Unit]
+Description=Test the S2MM005 interrupt acknowledgment on GPIO101
+ConditionKernelCommandLine=np545.irqack=1
+ConditionKernelCommandLine=np545.hotplug=1
+ConditionKernelCommandLine=!np545.ic10irq=1
+After=systemd-modules-load.service
+Conflicts=np545-ic10-irq.service sleep.target
+Before=sleep.target
+
+[Service]
+ExecStart=/usr/lib/np545xla-power/irq_ack.py
+SyslogIdentifier=np545-irq-ack

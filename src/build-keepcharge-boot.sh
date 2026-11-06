@@ -4,10 +4,10 @@ set -euo pipefail
 export LC_ALL=C
 mode=keepcharge
 case ${1:-} in
-    --hotplug|--ic10irq) mode=${1#--}; shift ;;
+    --hotplug|--ic10irq|--irqack) mode=${1#--}; shift ;;
 esac
 if [[ $# != 2 || -e $2 || -L $2 ]]; then
-    echo "Usage: $0 [--hotplug|--ic10irq] INSTALLED_BOOT_DIR NEW_OUTPUT_DIR" >&2; exit 2
+    echo "Usage: $0 [--hotplug|--ic10irq|--irqack] INSTALLED_BOOT_DIR NEW_OUTPUT_DIR" >&2; exit 2
 fi
 here=$(cd "$(dirname "$0")" && pwd)
 base=$(realpath "$1")
@@ -30,10 +30,15 @@ text = menu.read_text()
 mode = sys.argv[3]
 base_name = "Battery read-only test (Samsung)' --id battery-ro"
 base_diag = "battery"
-if mode == "ic10irq":
+if mode in ("ic10irq", "irqack"):
     base_name = "USB-C hotplug 12 V test (Samsung)' --id hotplug"
     base_diag = "hotplug"
-    title, service = "IC10 GPIO IRQ trace", "np545-ic10-irq"
+    if mode == "irqack":
+        if text.count("--id ic10irq ") != 1:
+            sys.exit("Expected the installed read-only IC10 IRQ trace menu")
+        title, service = "IC10 IRQ clear and retrigger", "np545-irq-ack"
+    else:
+        title, service = "IC10 GPIO IRQ trace", "np545-ic10-irq"
 elif mode == "hotplug":
     title, service = "USB-C hotplug 12 V test", "np545-pd-hotplug"
     if text.count("--id keepcharge ") != 1:
@@ -45,7 +50,7 @@ if (len(entries) != 1 or f'np545.{mode}=1' in text or f'--id {mode} ' in text
         or f'devicetree /boot/battery-{sys.argv[2]}.dtb' not in entries[0]
         or entries[0].count('systemd.wants=np545-charge-observe.service') != 1):
     sys.exit('Unexpected base entry')
-if mode == "ic10irq" and entries[0].count("np545.hotplug=1 systemd.wants=np545-pd-hotplug.service") != 1:
+if base_diag == "hotplug" and entries[0].count("np545.hotplug=1 systemd.wants=np545-pd-hotplug.service") != 1:
     sys.exit("Expected the existing hotplug service")
 trial = entries[0].replace(base_name, f"{title} (Samsung)' --id {mode}")
 trial = trial.replace(f'set diag_entry=Debian-{base_diag}', f'set diag_entry=Debian-{mode}')

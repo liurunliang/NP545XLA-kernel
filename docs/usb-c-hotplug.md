@@ -81,3 +81,11 @@ EMEC 的六个 GpioInt 按资源顺序为 704、26、41、768、81、42。通过
 原热插程序在 873.581 和 918.919 秒两次读回 1,024 mA，间隔 45.338 秒；第二次刷新时电池实测 +904 mA。保持 12 V 时，最后采到 GPIO101 为低电平；本轮记录器没有读清或写清 PD 中断，再触发及清中断流程仍需单独验证。停止监听后，五条输入均已释放，GPIO119 继续由原 I²C 设备占用。完整记录位于构建机的 `output/ic10irq/irq.jsonl`、`hotplug.jsonl`、`charge.jsonl` 和 `domains.txt`。
 
 五个一次性引导标记均已清零，原热插程序和续充程序的文件摘要复核通过。机器已正常重启回默认 Adreno 日用项（启动 ID `97f6503b-3082-46dc-9511-171b7e2cede6`），LightDM 活动，五个测试服务均为 inactive。记录见 `output/ic10irq/return.txt` 和 `output/ic10irq/daily-confirmed.txt`。
+
+### IC10 清中断与重新触发测试项
+
+**IC10 IRQ clear and retrigger (Samsung)** 单独订阅 GPIO101 下降沿。原热插服务继续轮询和刷新 BQ25710；原 GPIO 只读观测项仍可单独选择。
+
+三星的 S2MM005 驱动在 `process_cc_get_int_status` 中从 0x0030 读取 48 字节状态，随后 `s2mm005_int_clear` 向 0x0010 写一个字节 0x01。本机 EmuEC.sys 的 RVA `0xfca8` 与 `0xd5c0` 对应相同顺序，后者先经 `0xc648` 从 0x0008 读取五次以唤醒芯片。新服务在 IC10 地址 0x33 执行这一序列，把原始状态、下降沿序号、写入起止时刻和清除后的引脚电平记录到同一启动时钟上。它与选档和受电开关操作共用命令锁，低电平持续时只记录未确认释放，等待新的内核边沿。[三星中断状态处理](https://github.com/LineageOS/android_kernel_samsung_universal9810/blob/lineage-17.1/drivers/ccic/s2mm005_cc.c#L765-L785) · [三星清除命令](https://github.com/LineageOS/android_kernel_samsung_universal9810/blob/lineage-17.1/drivers/ccic/s2mm005.c#L283-L288) · [本机三星驱动包](https://github.com/tordona/woa-device-drivers/releases/tag/samsung-np545xla-drivers)
+
+重建使用 `src/build-debian-battery.sh "$work/obj" "$work/artifacts" output/irqack` 和 `src/build-keepcharge-boot.sh --irqack output/ic10irq/boot output/irqack/boot`。在三星 U 盘上安装生成的热插、只读观测和清中断包后，可运行 `sudo systemctl daemon-reload` 和 `sudo bash install-daily-boot.sh --battery-irqack boot manifest.txt`。测试时合并对照 `journalctl -b -t np545-irq-ack -t np545-hotplug -o cat` 及 `np545-charge` 的独立采样。

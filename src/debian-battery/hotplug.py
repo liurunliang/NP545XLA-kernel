@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Recover a physical IC10 detach / reattach in the dedicated NP545XLA USB trial."""
+from contextlib import contextmanager
 import ctypes as C
 import errno
 import fcntl
@@ -19,6 +20,17 @@ def send(chip, payload):
     msg = (Message * 1)(Message(chip.address, 0, len(data), data))
     if fcntl.ioctl(chip.fd, 0x0707, Transfer(msg, 1)) != 1:
         raise OSError("incomplete I2C transfer")
+
+
+@contextmanager
+def pd_mailbox(chip):
+    # One IC10 writer at a time, including its command response in register 0x14.
+    # Both services open the same I2C device inode with independent file handles.
+    fcntl.flock(chip.fd, fcntl.LOCK_EX)
+    try:
+        yield
+    finally:
+        fcntl.flock(chip.fd, fcntl.LOCK_UN)
 
 
 def profile(pd):
@@ -54,13 +66,18 @@ class Sink(Registers):
         return pd
 
     def select(self, known):
-        self.check(known, 5000)
-        # Samsung EmuEC: select PDO then enter PE_SNK_Select_Capability.
-        send(self, bytes([0, 0x10, 3, 3, known[0]]))
-        self.check(known, 5000)
-        send(self, bytes([0, 0x10, 3, 2, 19]))
+        with pd_mailbox(self):
+            self.check(known, 5000)
+            # Samsung EmuEC: select PDO then enter PE_SNK_Select_Capability.
+            send(self, bytes([0, 0x10, 3, 3, known[0]]))
+            self.check(known, 5000)
+            send(self, bytes([0, 0x10, 3, 2, 19]))
 
     def switches(self):
+        with pd_mailbox(self):
+            return self._switches_locked()
+
+    def _switches_locked(self):
         send(self, bytes.fromhex("00 10 03 92"))
         time.sleep(0.02)
         data = self.read(0x14)
@@ -70,10 +87,11 @@ class Sink(Registers):
 
     def consumer(self, on):
         # Same board's consumer-only command. Provider and discharge are both off.
-        send(self, bytes([0, 0x10, 3, 0x91, 0, int(on), 0, 2 * int(on)]))
-        time.sleep(0.05)
-        if self.switches() != int(on):
-            raise StopCharge("consumer switch readback mismatch")
+        with pd_mailbox(self):
+            send(self, bytes([0, 0x10, 3, 0x91, 0, int(on), 0, 2 * int(on)]))
+            time.sleep(0.05)
+            if self._switches_locked() != int(on):
+                raise StopCharge("consumer switch readback mismatch")
 
 
 class InputCharger(Charger):
