@@ -1,0 +1,8 @@
+[Unit]
+Description=Load the NP545XLA internal camera driver for the camera trial
+ConditionKernelCommandLine=np545.camera=1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/modprobe -d /usr/lib/np545xla-camera uvcvideo
+RemainAfterExit=yes

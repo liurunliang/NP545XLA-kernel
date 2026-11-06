@@ -9,12 +9,14 @@ lid_mode=
 if [[ ${1:-} == --adreno && $# == 4 ]]; then
     trial=$(realpath "$2")
     set -- "$3" "$4" "$trial/BOOTAA64.EFI"
-elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge ) ]]; then
+elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera ) ]]; then
     lid_mode=$1
     lid_trial=$(realpath "$2")
-    set -- "$3" "$lid_trial/lid.dtb" "$lid_trial/BOOTAA64.EFI"
+    trial_dt=lid.dtb
+    if [[ $lid_mode == --camera ]]; then trial_dt=camera.dtb; fi
+    set -- "$3" "$lid_trial/$trial_dt" "$lid_trial/BOOTAA64.EFI"
 fi
-[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt"
+[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt | --camera CAMERA_DIR manifest.txt"
 manifest=$(realpath "$1")
 dt=$(realpath "$2")
 efi=$(realpath "$3")
@@ -35,6 +37,7 @@ if [[ -n $trial ]]; then
 fi
 if [[ -n $lid_trial ]]; then
     names=$'BOOTAA64.EFI\nlid.dtb\nbase.txt'
+    if [[ $lid_mode == --camera ]]; then names=$'BOOTAA64.EFI\ncamera.dtb\nbase.txt'; fi
     if [[ $lid_mode == --lid-edge ]]; then names+=$'\nImage\nImage.sum'; fi
     [[ $(awk '{print $2}' "$lid_trial/SHA256SUMS") == "$names" ]] || die 'Invalid lid package'
     (cd "$lid_trial" && sha256sum --strict -c SHA256SUMS)
@@ -90,6 +93,22 @@ if [[ -n $lid_trial ]]; then
     fi
     lid_digest=$(sha256sum < "$dt" | cut -d' ' -f1)
     target="$boot/lid-$lid_digest.dtb"
+    if [[ $lid_mode == --camera ]]; then
+        target="$boot/camera-$lid_digest.dtb"
+        hog=/soc@0/pinctrl@3100000/camera-enable-hog
+        [[ $(fdtget -t u "$dt" "$hog" gpios) == '166 0' ]] || die 'Wrong camera GPIO'
+        fdtget "$dt" "$hog" output-high >/dev/null
+        modprobe -d /usr/lib/np545xla-camera --show-depends uvcvideo >/dev/null ||
+            die 'Install the matching np545xla-camera package first'
+        [[ -s /usr/lib/systemd/system/np545xla-camera.service && -x /usr/bin/np545xla-camera-test ]] ||
+            die 'Missing camera service or capture test'
+        backup="$loader.pre-camera"
+        if [[ ! -e $backup ]]; then
+            printf '%s  %s\n' "$base_efi" "$loader" | sha256sum --strict -c -
+            install_verified "$loader" "$backup"
+        fi
+        printf '%s  %s\n' "$base_efi" "$backup" | sha256sum --strict -c -
+    fi
     [[ ! -e $target ]] || cmp -s "$dt" "$target" || die 'Conflicting content-addressed lid DT'
     if [[ $lid_mode == --lid-edge ]]; then
         # GRUB reads its Image from the third GPT partition on this same disk.

@@ -8,7 +8,8 @@ trap 'rm -rf "$stage"' EXIT
 pack_menu() {
     local config=$1 output=$2
     local modules='part_gpt fat iso9660 normal configfile linux fdt search search_fs_file echo sleep test boot smbios'
-    if [[ ${3:-} == ext4 ]]; then modules+=" ext2 regexp probe hashsum gcry_sha256"; fi
+    if [[ ${3:-} == ext4* ]]; then modules+=" ext2 regexp probe hashsum gcry_sha256"; fi
+    if [[ ${3:-} == ext4-once ]]; then modules+=" loadenv"; fi
     grub-script-check "$config"
     grub-mkstandalone -O arm64-efi --locales='' --fonts='' --themes='' --install-modules="$modules" --modules="$modules" \
         -o "$stage/BOOTAA64.EFI" "boot/grub/grub.cfg=$config"
@@ -16,7 +17,7 @@ pack_menu() {
     install -m 644 "$stage/BOOTAA64.EFI" "$output"
 }
 
-if [[ $# == 3 && ( $1 == --config || $1 == --config-ext4 ) ]]; then
+if [[ $# == 3 && ( $1 == --config || $1 == --config-ext4 || $1 == --config-ext4-once ) ]]; then
     pack_menu "$2" "$3" "${1#--config-}"
     exit
 fi
