@@ -2,6 +2,8 @@
 
 启动菜单的前三项是诊断系统，第四项使用已验收的原 Debian 设备树。第五项 **Debian 13 - daily desktop (Samsung)** 使用单独的日用设备树，可手动选择以回退。当前 SanDisk 的默认项是 **Debian 13 - Adreno unified DRM trial (Samsung)**。这些 Debian 入口共用 USB 根文件系统和系统账户，均关闭内置 UFS。更新日用设备树后，菜单中的 **previous daily device tree** 可启动前一版日用配置。
 
+内置摄像头使用单独的 **Camera 720p test** 启动项。[安装和验证摄像头](debian-camera.md)
+
 ## 生成设备树与菜单
 
 在制作原镜像的 Debian ARM64 环境运行。以下命令使用原 Debian 镜像清单及其 FAT 启动分区里的 `/boot/debian-samsung.dtb`。从同一介质提取这个文件，先与清单的 SHA-256 核对。使用 `--port0-x1` 构建对应内核的无线模块包和设备树片段。示例假设无线产物位于 `output/daily/wifi`。[无线驱动构建说明](debian-wifi.md)

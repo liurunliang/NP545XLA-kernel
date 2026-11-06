@@ -36,11 +36,11 @@ install -Dm755 "$here/probe-debian-camera.py" "$pkg/usr/bin/np545xla-camera-test
 mkdir -p "$pkg/DEBIAN"
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: np545xla-camera
-Version: $release-1
+Version: $release-3
 Architecture: arm64
 Maintainer: NP545XLA Linux contributors <root@localhost>
-Depends: kmod, v4l-utils, ffmpeg, python3
+Depends: kmod, v4l-utils, python3-gi, gir1.2-gstreamer-1.0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good
 Description: Opt-in UVC driver and 720p capture test for the Samsung Debian USB
 CONTROL
 dpkg-deb --root-owner-group --build "$pkg" "$work/camera.deb"
-install -m644 "$work/camera.deb" "$out/np545xla-camera_${release}-1_arm64.deb"
+install -m644 "$work/camera.deb" "$out/np545xla-camera_${release}-3_arm64.deb"
