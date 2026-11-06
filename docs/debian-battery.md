@@ -4,6 +4,8 @@
 
 驱动只调用 SMBus Read Word 从电池取值。构建时核验编译后的模块引用的总线传输函数。充电芯片地址 0x09 没有设备节点。电量、电压、有符号电流、充放电状态和电池当前单位下的剩余与满充容量通过 Linux power_supply 提供。0 电流且电池自行报告充满时显示 Full，其余 0 电流显示 Not charging。电流的正负反映电池方向；外接适配器是否在线需与现场操作核对。上游 SBS 驱动的部分容量读取路径会切换计量模式，本测试只读取现行单位。[上游驱动](https://github.com/torvalds/linux/blob/v7.0/drivers/power/supply/sbs-battery.c)
 
+在此基础上，电池菜单可升级为同时采集 USB-C 协商及充电器只读设置的版本。[充电诊断和社区实现对照](charge-diagnostics.md)
+
 ## 取样和测量
 
 ```sh

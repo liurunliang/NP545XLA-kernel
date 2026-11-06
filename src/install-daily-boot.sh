@@ -9,15 +9,15 @@ lid_mode=
 if [[ ${1:-} == --adreno && $# == 4 ]]; then
     trial=$(realpath "$2")
     set -- "$3" "$4" "$trial/BOOTAA64.EFI"
-elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera || $1 == --battery ) ]]; then
+elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera || $1 == --battery || $1 == --battery-diag ) ]]; then
     lid_mode=$1
     lid_trial=$(realpath "$2")
     trial_dt=lid.dtb
     if [[ $lid_mode == --camera ]]; then trial_dt=camera.dtb; fi
-    if [[ $lid_mode == --battery ]]; then trial_dt=battery.dtb; fi
+    if [[ $lid_mode == --battery || $lid_mode == --battery-diag ]]; then trial_dt=battery.dtb; fi
     set -- "$3" "$lid_trial/$trial_dt" "$lid_trial/BOOTAA64.EFI"
 fi
-[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt | --camera CAMERA_DIR manifest.txt | --battery BATTERY_DIR manifest.txt"
+[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt | --camera CAMERA_DIR manifest.txt | --battery BATTERY_DIR manifest.txt | --battery-diag UPDATED_BATTERY_DIR manifest.txt"
 manifest=$(realpath "$1")
 dt=$(realpath "$2")
 efi=$(realpath "$3")
@@ -39,7 +39,7 @@ fi
 if [[ -n $lid_trial ]]; then
     names=$'BOOTAA64.EFI\nlid.dtb\nbase.txt'
     if [[ $lid_mode == --camera ]]; then names=$'BOOTAA64.EFI\ncamera.dtb\nbase.txt'; fi
-    if [[ $lid_mode == --battery ]]; then names=$'BOOTAA64.EFI\nbattery.dtb\nbase.txt'; fi
+    if [[ $lid_mode == --battery || $lid_mode == --battery-diag ]]; then names=$'BOOTAA64.EFI\nbattery.dtb\nbase.txt'; fi
     if [[ $lid_mode == --lid-edge ]]; then names+=$'\nImage\nImage.sum'; fi
     [[ $(awk '{print $2}' "$lid_trial/SHA256SUMS") == "$names" ]] || die 'Invalid lid package'
     (cd "$lid_trial" && sha256sum --strict -c SHA256SUMS)
@@ -104,7 +104,7 @@ if [[ -n $lid_trial ]]; then
             die 'Install the matching np545xla-camera package first'
         [[ -s /usr/lib/systemd/system/np545xla-camera.service && -x /usr/bin/np545xla-camera-test ]] ||
             die 'Missing camera service or capture test'
-    elif [[ $lid_mode == --battery ]]; then
+    elif [[ $lid_mode == --battery || $lid_mode == --battery-diag ]]; then
         bus=/soc@0/geniqup@cc0000/i2c@c88000
         target="$boot/battery-$lid_digest.dtb"
         [[ $(fdtget "$dt" "$bus" status) == okay &&
@@ -114,8 +114,16 @@ if [[ -n $lid_trial ]]; then
         modinfo -n np545_battery >/dev/null || die 'Install the read-only battery package first'
         [[ -x /usr/bin/np545xla-battery-sample && -s /usr/lib/systemd/system/np545-battery-sample.service ]] ||
             die 'Missing battery recorder'
+        if [[ $lid_mode == --battery-diag ]]; then
+            [[ -x /usr/bin/np545xla-charge-observe && -s /usr/lib/systemd/system/np545-charge-observe.service ]] ||
+                die 'Missing read-only PD and charger observer'
+            for port in /soc@0/geniqup@ac0000/i2c@a84000 /soc@0/geniqup@cc0000/i2c@c84000; do
+                [[ $(fdtget "$dt" "$port" status) == okay && -z $(fdtget -l "$dt" "$port") ]] ||
+                    die 'Unexpected PD bus or bound child'
+            done
+        fi
     fi
-    if [[ $lid_mode == --camera || $lid_mode == --battery ]]; then
+    if [[ $lid_mode == --camera || $lid_mode == --battery || $lid_mode == --battery-diag ]]; then
         backup="$loader.pre-${lid_mode#--}"
         if [[ ! -e $backup ]]; then
             printf '%s  %s\n' "$base_efi" "$loader" | sha256sum --strict -c -

@@ -1,0 +1,7 @@
+[Unit]
+Description=Observe Samsung USB-C negotiation and BQ25710 charger settings
+ConditionKernelCommandLine=np545.battery=1
+
+[Service]
+ExecStart=/usr/bin/np545xla-charge-observe --watch
+SyslogIdentifier=np545-charge
