@@ -33,7 +33,7 @@ src/build-battery-boot.sh output/debian-final/manifest.txt output/camera/boot \
 将软件包、生成的 boot 目录、原 manifest.txt 和新版 install-daily-boot.sh 放到三星 USB Debian，执行：
 
 ```sh
-sudo apt-get install --no-install-recommends ./np545xla-battery-ro_7.0.0-2_arm64.deb
+sudo apt-get install --no-install-recommends ./np545xla-battery-ro_7.0.0-3_arm64.deb
 sudo systemctl daemon-reload
 sudo bash install-daily-boot.sh --battery boot manifest.txt
 ```

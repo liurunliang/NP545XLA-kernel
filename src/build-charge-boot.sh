@@ -56,7 +56,8 @@ p = Path(path)
 text = p.read_text()
 dt = f"/boot/battery-{old}.dtb"
 arg = "np545.battery=1 systemd.wants=np545-battery-sample.service"
-if text.count(dt) != 2 or text.count(arg) != 1 or text.count("--id battery-ro") != 1:
+if (text.count(dt) != 2 or text.count(arg) != 1 or text.count("--id battery-ro") != 1
+        or "systemd.wants=np545-charge-observe.service" in text):
     sys.exit("Unexpected installed battery menu")
 p.write_text(text.replace(dt, f"/boot/battery-{new}.dtb").replace(arg, arg+" systemd.wants=np545-charge-observe.service"))
 PY
