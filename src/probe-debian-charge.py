@@ -36,11 +36,13 @@ def adapter(label):
 
 
 class Registers:
+    open_flags = os.O_RDONLY
+
     def __init__(self, label, address):
         if (label, address) not in (("ic10", 0x33), ("ic19", 0x33), ("ic20", 0x09)):
             raise ValueError("unknown board endpoint")
         self.address = address
-        self.fd = os.open("/dev/" + adapter(label), os.O_RDONLY | os.O_CLOEXEC)
+        self.fd = os.open("/dev/" + adapter(label), self.open_flags | os.O_CLOEXEC)
         try:
             # Refuse a kernel-owned address; never force access.
             fcntl.ioctl(self.fd, 0x0703, address)
@@ -104,7 +106,7 @@ def charger():
         raw = {r: chip.word(r) for r in (0x12, 0x14, 0x15, 0x22, 0x3f, 0x35, 0x23)}
     return dict(manufacturer=vendor, part=part, raw={f"{r:02x}":v for r, v in raw.items()},
                 watchdog_s=(0, 5, 88, 175)[(raw[0x12] >> 13) & 3], inhibit=bool(raw[0x12] & 1),
-                current_setting_mA=raw[0x14] & 0x1fc0, voltage_setting_mV=raw[0x15] & 0x7ff0,
+                current_setting_mA=raw[0x14] & 0x1fc0, voltage_setting_mV=raw[0x15] & 0x7ff8,
                 input_limit_code=(raw[0x22] >> 8) & 127,
                 vbus_adc_continuous=bool(raw[0x35] & 0x8000 and raw[0x35] & 0x40 and not raw[0x12] & 0x8000))
 

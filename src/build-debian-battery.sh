@@ -25,12 +25,14 @@ install -Dm644 "$stage/np545_battery.ko" "$pkg/usr/lib/modules/$release/extra/np
 install -Dm755 "$here/probe-debian-battery.py" "$pkg/usr/bin/np545xla-battery-sample"
 install -Dm644 "$here/debian-battery/np545-battery-sample.service" "$pkg/usr/lib/systemd/system/np545-battery-sample.service"
 install -Dm755 "$here/debian-battery/sleep-sample" "$pkg/usr/lib/systemd/system-sleep/np545-battery-sample"
-install -Dm755 "$here/probe-debian-charge.py" "$pkg/usr/bin/np545xla-charge-observe"
+powerlib=usr/lib/np545xla-power
+install -Dm755 "$here/probe-debian-charge.py" "$pkg/$powerlib/np545_charge_observe.py"
+ln -s "../lib/np545xla-power/np545_charge_observe.py" "$pkg/usr/bin/np545xla-charge-observe"
 install -Dm644 "$here/debian-battery/np545-charge-observe.service" "$pkg/usr/lib/systemd/system/np545-charge-observe.service"
 mkdir -p "$pkg/DEBIAN"
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: np545xla-battery-ro
-Version: $release-3
+Version: $release-4
 Architecture: arm64
 Maintainer: NP545XLA Linux contributors <root@localhost>
 Depends: kmod, python3
@@ -40,4 +42,19 @@ for name in postinst postrm; do
     printf '#!/bin/sh\nset -e\nif [ -d /lib/modules/%s ]; then depmod -a %s; fi\n' "$release" "$release" > "$pkg/DEBIAN/$name"
     chmod +x "$pkg/DEBIAN/$name"
 done
-dpkg-deb --root-owner-group --build "$pkg" "$out/np545xla-battery-ro_${release}-3_arm64.deb"
+dpkg-deb --root-owner-group --build "$pkg" "$out/np545xla-battery-ro_${release}-4_arm64.deb"
+
+# The writer is an independent package with no enablement in the default target.
+trial=$stage/trial
+install -Dm755 "$here/debian-battery/keepcharge.py" "$trial/$powerlib/keepcharge.py"
+install -Dm644 "$here/debian-battery/np545-charge-keepalive.service" "$trial/usr/lib/systemd/system/np545-charge-keepalive.service"
+mkdir -p "$trial/DEBIAN"
+cat > "$trial/DEBIAN/control" <<CONTROL
+Package: np545xla-charge-keepalive
+Version: $release-1
+Architecture: arm64
+Maintainer: NP545XLA Linux contributors <root@localhost>
+Depends: np545xla-battery-ro (= $release-4)
+Description: Current refresh for the optional Samsung active charge trial
+CONTROL
+dpkg-deb --root-owner-group --build "$trial" "$out/np545xla-charge-keepalive_${release}-1_arm64.deb"

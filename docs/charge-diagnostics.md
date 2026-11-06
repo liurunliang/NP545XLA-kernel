@@ -13,7 +13,7 @@
 
 - S2MM005 读取状态 0x0020、收到的电源能力 0x0260 和发出的请求 0x0240。只在两次状态相同、已连接、角色为用电端且处于 Sink_Ready 时解释固定 PDO 请求。源能力和请求缓冲在拔线后可能保留旧值；请求电压是协议值，不能替代电压表。[三星寄存器与状态定义](https://github.com/LineageOS/android_kernel_samsung_universal9810/blob/lineage-17.1/include/linux/ccic/s2mm005.h) · [三星 PD 消息实现](https://github.com/LineageOS/android_kernel_samsung_universal9810/blob/lineage-17.1/drivers/ccic/s2mm005_pd.c)
 - BQ25710 必须读到厂商 0x0040、器件 0x0089 后才采集设置。记录看门狗时限、充电禁止位、充电电流和电压设定、输入限流和 ADC 配置。芯片状态寄存器 0x20 的部分故障位是读后清除，采样器跳过该寄存器；不启动 ADC，不改写任何控制字段。持续电压转换未开启时，ADC 原始值不能代表当前 VBUS。[TI BQ25710 手册，第 9.3、9.6 节](https://www.ti.com/lit/ds/symlink/bq25710.pdf)
-- 电池请求电流和电压来自智能电池自己的 0x14、0x15；它们与 BQ25710 同号寄存器的目标值、以及电池实际电流分别记录。没有充电器写入服务。
+- 电池请求电流和电压来自智能电池自己的 0x14、0x15；它们与 BQ25710 同号寄存器的目标值、以及电池实际电流分别记录。此只读入口只启动采样服务。带电启动后的主动续充使用另一个独立入口。[BQ25710 续充试验](bq25710-keepalive.md)
 
 ## 重建与安装
 

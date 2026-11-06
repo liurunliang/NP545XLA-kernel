@@ -7,6 +7,7 @@
 #include <linux/workqueue.h>
 
 #define SBS_MODE             0x03
+#define SBS_TEMPERATURE      0x08
 #define SBS_VOLTAGE          0x09
 #define SBS_CURRENT          0x0a
 #define SBS_SOC              0x0d
@@ -74,7 +75,7 @@ static int capacity(struct np545_battery *bat, u8 reg, bool energy)
 }
 
 static enum power_supply_property properties[] = {
-	POWER_SUPPLY_PROP_STATUS, POWER_SUPPLY_PROP_CAPACITY,
+	POWER_SUPPLY_PROP_STATUS, POWER_SUPPLY_PROP_CAPACITY, POWER_SUPPLY_PROP_TEMP,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW, POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
 	POWER_SUPPLY_PROP_CURRENT_NOW, POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
 	POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX, POWER_SUPPLY_PROP_CHARGE_NOW,
@@ -93,6 +94,14 @@ static int get_property(struct power_supply *psy, enum power_supply_property pro
 	case POWER_SUPPLY_PROP_STATUS:
 		raw = status(bat);
 		break;
+	case POWER_SUPPLY_PROP_TEMP:
+		raw = word(bat, SBS_TEMPERATURE);
+		if (raw < 0)
+			return raw;
+		if (!raw || raw == 0xffff)
+			return -ENODATA;
+		val->intval = raw - 2731;
+		return 0;
 	case POWER_SUPPLY_PROP_CAPACITY:
 		raw = word(bat, SBS_SOC);
 		if (raw > 100)
@@ -210,13 +219,30 @@ static void np545_remove(struct i2c_client *client)
 	cancel_delayed_work_sync(&bat->refresh);
 }
 
+static ssize_t sbs_status_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct np545_battery *bat = dev_get_drvdata(dev);
+	int flags = word(bat, SBS_STATUS);
+
+	if (flags < 0)
+		return flags;
+	return sysfs_emit(buf, "0x%04x\n", flags);
+}
+static DEVICE_ATTR_RO(sbs_status);
+
+static struct attribute *np545_attrs[] = {
+	&dev_attr_sbs_status.attr, NULL
+};
+ATTRIBUTE_GROUPS(np545);
+
 static const struct of_device_id np545_of_match[] = {
 	{ .compatible = "samsung,np545xla-battery-ro" }, {}
 };
 MODULE_DEVICE_TABLE(of, np545_of_match);
 
 static struct i2c_driver np545_driver = {
-	.driver = { .name = "np545-battery-ro", .of_match_table = np545_of_match },
+	.driver = { .name = "np545-battery-ro", .of_match_table = np545_of_match,
+		    .dev_groups = np545_groups },
 	.probe = np545_probe,
 	.remove = np545_remove,
 };

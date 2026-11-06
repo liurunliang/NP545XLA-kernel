@@ -1,0 +1,12 @@
+[Unit]
+Description=Maintain firmware-started BQ25710 charging on the Samsung 12 V trial
+ConditionKernelCommandLine=np545.keepcharge=1
+ConditionKernelCommandLine=np545.battery=1
+Conflicts=sleep.target
+Before=sleep.target
+After=systemd-modules-load.service
+
+[Service]
+ExecStart=/usr/lib/np545xla-power/keepcharge.py
+SyslogIdentifier=np545-keepcharge
+TimeoutStopSec=12
