@@ -40,7 +40,7 @@ elif mode == "hotplug":
         sys.exit("Expected the installed BQ25710 keepalive menu")
 else:
     title, service = "BQ25710 charge keepalive test", "np545-charge-keepalive"
-entries = re.findall(r"\nmenuentry '" + re.escape(base_name) + r" \{.*?\n\}", text, re.S)
+entries = re.findall(r"\nmenuentry 'Debian 13 - " + re.escape(base_name) + r" \{.*?\n\}", text, re.S)
 if (len(entries) != 1 or f'np545.{mode}=1' in text or f'--id {mode} ' in text
         or f'devicetree /boot/battery-{sys.argv[2]}.dtb' not in entries[0]
         or entries[0].count('systemd.wants=np545-charge-observe.service') != 1):
