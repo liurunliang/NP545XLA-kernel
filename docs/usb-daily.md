@@ -90,6 +90,26 @@ src/build-lid-boot.sh output/debian-final/manifest.txt output/adreno/default-men
 
 **重复合盖仍有漏报。** 同一次开机稍后，10:42:01 操作者先手动请求睡眠，10:42:07 系统恢复并记录合盖，10:42:10 记录开盖。这是内核计数中的第二次睡眠。10:45:11 仅合盖，GPIO50 由高变低，IRQ 166 计数仍为 7，输入设备保持 `SW_LID=0`。约 18 秒后开盖，GPIO50 恢复高电平，IRQ 计数才变为 8。期间 logind 没有收到新的盖子事件，成功计数一直为 2，累计睡眠时间保持 45.606 秒。已定位到这次合盖的下降沿没有传递到 GPIO 中断，仍需查明中断控制器丢失该边沿的条件。现场对照记录为同一目录的 `gpio-irq-reproduction.txt` 和 `second-window.txt`。
 
+#### GPIO50 的边沿检测
+
+在上述原版内核的同一次启动中，只读快照确认中断路径为 GPIO50 → PDC52 → GIC564。PDC 版本寄存器为 `0x00010701`。在已经发生过漏报的状态下，PDC52 仍启用且配置为双沿（类型 7），GIC 未屏蔽。临时阻止合盖睡眠后再做一次 5 秒开合，两个电平均有中断送达，IRQ 计数由 8 增至 10，PDC 配置始终为 7。这说明漏报并非每次必现；之前漏报的瞬间没有寄存器快照。原版记录位于 `output/daily/lid-edge/old-open-pdc.txt` 和 `old-ab.jsonl`。
+
+试验内核只为 NP545XLA 的 SC8180x GPIO50 采用 Linux 已有的双沿处理方法。驱动在盖子打开时让 PDC 等待下降沿，在盖子关闭时等待上升沿，并在处理中重读引脚，防止切换期间错过状态变化。类似的下降沿漏报曾在搭载 SDM845 的 Lenovo Yoga C630 实机上通过这一机制修复。[上游 C630 讨论](https://lkml.iu.edu/2111.0/01388.html) · [三星板级补丁](../patches/linux-7.0-np545xla-lid-edge.patch)
+
+在 ARM64 构建机上先运行 `src/build-lid-edge-image.sh LINUX_SOURCE KERNEL_BUILD DIAG_ARTIFACTS KERNEL_OUT`，然后运行 `src/build-lid-edge-boot.sh output/debian-final/manifest.txt output/daily/lid-test/boot KERNEL_OUT BOOT_OUT`。在三星上运行 `sudo bash src/install-daily-boot.sh --lid-edge BOOT_OUT output/debian-final/manifest.txt`，手选 **Debian 13 - Lid edge kernel (Samsung)**。该入口从同一 SanDisk 的 ext4 根分区按 SHA-256 校验并加载独立内核，设备树、内存启动环境、Adreno 固件均来自前一轮验收件。原 Adreno 仍为默认项，原 Lid test 可用于同机对照。启动后可核对 `np545.lid_edge=1` 和内核日志中的 `NP545XLA lid GPIO50: alternating PDC edges`。[同步记录盖子状态、中断与睡眠时间](../src/probe-debian-lid.py)
+
+当前安装使用内核 SHA-256 `509f2ff696f9dfc090e58bbe3a38593d8184561f6099fd328188243eb190561f` 和 EFI SHA-256 `e5d1ce10259cb74788d63479a75b34f4144576207bd672ed94e1866a3c0a6830`。QEMU 从最终菜单冷启动，通过 USB 根盘和公钥 SSH 登录验证了候选与原版，候选 Image 损坏或根分区 UUID 不符时均在加载 Linux 前停止。三星安装后已读回 16 个 EFI 分区文件，并绕过文件缓存读回完整候选内核。三星运行内核的构建 ID 为 `5b9aa4b062a74ae1d4f9ddd3cb4d8e9309034a9b`，开盖时 PDC52 的配置为下降沿（类型 2）。
+
+11 月 6 日，三星 Xfce Wayland 桌面连续进行了三轮合盖睡眠和开盖唤醒。每轮都是 logind 收到盖子关闭事件后自动发起 `s2idle`。每次只打开盖子，现场均看到内屏自行亮起。
+
+| 轮次 | 实际睡眠时间 | GPIO50 中断累计计数 | 成功 / 失败累计 |
+| --- | ---: | --- | --- |
+| 1 | 14.222 秒 | 0 → 2 | 1 / 0 |
+| 2 | 17.349 秒 | 2 → 4 | 2 / 0 |
+| 3 | 14.344 秒 | 4 → 6 | 3 / 0 |
+
+三次合盖后的快照均显示 PDC52 已切换到上升沿（类型 6），三次开盖后均已重新等待下一次下降沿（类型 2）。原版间歇漏掉的下降沿在两次连续唤醒后的后续合盖均正常送达。三轮结束后仍是同一开机编号和同一 Xfce 会话。USB 控制器每次恢复都重新初始化，但 SSH、Wi-Fi 和 USB 根盘写入、同步、读回通过，ext4 错误数为零。原始记录位于 `output/daily/lid-edge/physical-2d0bf52c/`，包括逐事件快照 `cycles.jsonl`、逐轮计数 `cycle-summary.txt` 及 logind 和内核日志 `journal.txt`。
+
 ## 启动探测日志
 
 这台机器的键盘异常报告可在一秒内覆盖原来的内核缓冲区。日用入口将缓冲区设为 16 MiB。在三星 Debian 上安装限时记录服务并启用，下一次该入口开机时，前三分钟的驱动探测信息会保存到内存中的 `/run/np545xla-daily-probe.log`。
