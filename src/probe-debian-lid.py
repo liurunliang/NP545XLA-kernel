@@ -36,6 +36,8 @@ def emit(**fields):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seconds", type=int, default=900, help="elapsed capture duration, including sleep")
+    parser.add_argument("--event-clock", choices=("boottime", "monotonic"), default="boottime",
+                        help="use monotonic to compare lid event timestamps with kernel PWM messages")
     args = parser.parse_args()
     if args.seconds < 1 or os.geteuid() != 0:
         parser.error("run as root with a positive capture duration")
@@ -50,8 +52,11 @@ def main():
     record = struct.Struct("@llHHi")  # Linux arm64 struct input_event
     deadline = time.clock_gettime(time.CLOCK_BOOTTIME) + args.seconds
     with open(Path("/dev/input") / nodes[0].name, "rb", buffering=0) as device:
-        fcntl.ioctl(device, 0x400445A0, array.array("i", [time.CLOCK_BOOTTIME]))  # EVIOCSCLOCKID
-        emit(device=device.name, boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip())
+        clock_id = time.CLOCK_BOOTTIME if args.event_clock == "boottime" else time.CLOCK_MONOTONIC
+        event_field = "event_boot_s" if args.event_clock == "boottime" else "event_mono_s"
+        fcntl.ioctl(device, 0x400445A0, array.array("i", [clock_id]))  # EVIOCSCLOCKID
+        emit(device=device.name, event_clock=args.event_clock,
+             boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip())
         prev, heartbeat = None, 0.
         while (left := deadline - time.clock_gettime(time.CLOCK_BOOTTIME)) > 0:
             current = snapshot(device)
@@ -69,7 +74,7 @@ def main():
             if select.select([device], [], [], min(.4, left))[0]:
                 sec, usec, kind, code, value = record.unpack(device.read(record.size))
                 if (kind, code) == (5, 0):  # EV_SW / SW_LID only
-                    emit(event=value, event_boot_s=round(sec + usec / 1e6, 6))
+                    emit(event=value, **{event_field: round(sec + usec / 1e6, 6)})
 
 
 if __name__ == "__main__":
