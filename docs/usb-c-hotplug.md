@@ -53,3 +53,11 @@ sudo journalctl -b -t np545-charge -o cat
 正常停止服务后，读回充电设定为 0 mA，测试开启的受电开关也已关闭。重启前再次独立读取 BQ 的充电设定，确认是 0 mA；四个一次性启动标记均为 0。
 
 正常重启回原默认 Adreno 日用项，启动 ID 为 `a406ddd0-54da-4650-90ca-7ae3bda1a063`。同一个 U 盘根分区正常挂载，LightDM 活动、Adreno `separate_gpu_kms=N`；热插、续充和两个采样服务全部为 inactive。核对记录见 `output/hotplug/return.txt` 和 `output/hotplug/daily-confirmed.txt`。
+
+## IC10 中断线独立观测项
+
+**IC10 GPIO IRQ trace (Samsung)** 继承上面的热插项及其只读 PD 和电池采样器，增加 `np545.ic10irq=1` 和一个输入边沿记录器。`np545-pd-hotplug` 本身仍负责原有热插处理和约 45 秒的续充刷新。记录器只读取 IC10 的既有状态、源能力和请求寄存器，避开中断状态及清中断命令。GPIO 边沿订阅会在 Linux 一侧注册下降沿 IRQ；只订阅处于 GPIO 输入功能且未被占用的线，使用原有偏置，记录结束时释放。
+
+EMEC 的六个 GpioInt 按资源顺序为 704、26、41、768、81、42。通过本机 GIO0 的中断资源表、DT 中 PDC 的范围和 SC8180x 引脚映射表，704 / 64 = 11 → GSI 588 → SPI 556 → PDC 76 → GPIO101；768 / 64 = 12 → GSI 599 → SPI 567 → PDC 87 → GPIO119。其余四条为直接编号。本机三星 EmuEC.sys 在 RVA `0x7ab8` 分两组注册中断；组内第一项的回调 `0x7d70` 经 `0x8ae8` 和 `0x1cfe8` 进入 PD 处理函数 `0xfec0`。这是定位 GPIO101 的固件依据，实际边沿另行对照。[板上 DSDT](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L93774) · [Qualcomm 虚拟引脚说明](https://marc.info/?l=devicetree&m=178272904036845&w=3) · [Linux v7.0 SC8180x 引脚表](https://github.com/torvalds/linux/blob/v7.0/drivers/pinctrl/qcom/pinctrl-sc8180x.c) · [三星驱动包](https://github.com/tordona/woa-device-drivers/releases/tag/samsung-np545xla-drivers)
+
+在 ARM64 构建机运行 `src/build-debian-battery.sh "$work/obj" "$work/artifacts" output/ic10irq` 和 `src/build-keepcharge-boot.sh --ic10irq output/hotplug/boot output/ic10irq/boot`。U 盘已安装上一版热插包时，仅需安装新增的 `np545xla-ic10-irq` 及其 Debian 依赖 `python3-libgpiod`，然后运行 `sudo systemctl daemon-reload` 和 `sudo bash install-daily-boot.sh --battery-ic10irq boot manifest.txt`。通过 `sudo journalctl -b -t np545-ic10-irq -o cat` 查看内核边沿时间、线电平、IRQ 计数及 IC10 状态，使用同一启动的 BOOTTIME 对齐 `np545-hotplug` 和 `np545-charge` 记录。

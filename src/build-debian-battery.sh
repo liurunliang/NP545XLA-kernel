@@ -72,3 +72,17 @@ Depends: np545xla-charge-keepalive (= $release-2)
 Description: Samsung IC10 USB-C sink reconnect trial
 CONTROL
 dpkg-deb --root-owner-group --build "$hotplug" "$out/np545xla-pd-hotplug_${release}-1_arm64.deb"
+
+trace=$stage/trace
+install -Dm755 "$here/debian-battery/ic10_irq.py" "$trace/$powerlib/ic10_irq.py"
+install -Dm644 "$here/debian-battery/np545-ic10-irq.service" "$trace/usr/lib/systemd/system/np545-ic10-irq.service"
+mkdir -p "$trace/DEBIAN"
+cat > "$trace/DEBIAN/control" <<CONTROL
+Package: np545xla-ic10-irq
+Version: $release-1
+Architecture: arm64
+Maintainer: NP545XLA Linux contributors <root@localhost>
+Depends: np545xla-pd-hotplug (= $release-1), python3-libgpiod (>= 2)
+Description: Read-only IC10 GPIO edge and PD state trace for the Samsung trial
+CONTROL
+dpkg-deb --root-owner-group --build "$trace" "$out/np545xla-ic10-irq_${release}-1_arm64.deb"

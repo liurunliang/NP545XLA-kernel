@@ -1,0 +1,11 @@
+[Unit]
+Description=Observe candidate IC10 GPIO interrupts and PD state
+ConditionKernelCommandLine=np545.ic10irq=1
+ConditionKernelCommandLine=np545.hotplug=1
+After=systemd-modules-load.service
+Conflicts=sleep.target
+Before=sleep.target
+
+[Service]
+ExecStart=/usr/lib/np545xla-power/ic10_irq.py
+SyslogIdentifier=np545-ic10-irq

@@ -10,7 +10,7 @@ battery_trial=
 if [[ ${1:-} == --adreno && $# == 4 ]]; then
     trial=$(realpath "$2")
     set -- "$3" "$4" "$trial/BOOTAA64.EFI"
-elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera || $1 == --battery || $1 == --battery-diag || $1 == --battery-keepalive || $1 == --battery-hotplug ) ]]; then
+elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera || $1 == --battery || $1 == --battery-diag || $1 == --battery-keepalive || $1 == --battery-hotplug || $1 == --battery-ic10irq ) ]]; then
     lid_mode=$1
     lid_trial=$(realpath "$2")
     trial_dt=lid.dtb
@@ -18,7 +18,7 @@ elif [[ $# == 3 && ( $1 == --lid || $1 == --lid-edge || $1 == --camera || $1 == 
     if [[ $lid_mode == --battery* ]]; then trial_dt=battery.dtb; battery_trial=1; fi
     set -- "$3" "$lid_trial/$trial_dt" "$lid_trial/BOOTAA64.EFI"
 fi
-[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt | --camera CAMERA_DIR manifest.txt | --battery BATTERY_DIR manifest.txt | --battery-diag UPDATED_BATTERY_DIR manifest.txt | --battery-keepalive KEEPALIVE_DIR manifest.txt | --battery-hotplug HOTPLUG_DIR manifest.txt"
+[[ $# == 3 && $EUID == 0 ]] || die "Usage: sudo $0 manifest.txt daily.dtb BOOTAA64.EFI | --adreno TRIAL_DIR manifest.txt CURRENT_daily.dtb | --lid LID_DIR manifest.txt | --lid-edge EDGE_DIR manifest.txt | --camera CAMERA_DIR manifest.txt | --battery BATTERY_DIR manifest.txt | --battery-diag UPDATED_BATTERY_DIR manifest.txt | --battery-keepalive KEEPALIVE_DIR manifest.txt | --battery-hotplug HOTPLUG_DIR manifest.txt | --battery-ic10irq IRQ_DIR manifest.txt"
 manifest=$(realpath "$1")
 dt=$(realpath "$2")
 efi=$(realpath "$3")
@@ -123,11 +123,15 @@ if [[ -n $lid_trial ]]; then
                     die 'Unexpected PD bus or bound child'
             done
         fi
-        if [[ $lid_mode == --battery-hotplug ]]; then
+        if [[ $lid_mode == --battery-ic10irq ]]; then
+            [[ -x /usr/lib/np545xla-power/ic10_irq.py && -s /usr/lib/systemd/system/np545-ic10-irq.service ]] ||
+                die 'Install the IC10 input edge recorder first'
+        fi
+        if [[ $lid_mode == --battery-hotplug || $lid_mode == --battery-ic10irq ]]; then
             [[ -x /usr/lib/np545xla-power/hotplug.py && -s /usr/lib/systemd/system/np545-pd-hotplug.service ]] ||
                 die 'Install the hotplug test package first'
         fi
-        if [[ $lid_mode == --battery-keepalive || $lid_mode == --battery-hotplug ]]; then
+        if [[ $lid_mode == --battery-keepalive || $lid_mode == --battery-hotplug || $lid_mode == --battery-ic10irq ]]; then
             [[ -x /usr/lib/np545xla-power/keepcharge.py && -s /usr/lib/systemd/system/np545-charge-keepalive.service ]] ||
                 die 'Install the charge keepalive trial package first'
         fi

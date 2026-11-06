@@ -3,9 +3,11 @@
 set -euo pipefail
 export LC_ALL=C
 mode=keepcharge
-if [[ ${1:-} == --hotplug ]]; then mode=hotplug; shift; fi
+case ${1:-} in
+    --hotplug|--ic10irq) mode=${1#--}; shift ;;
+esac
 if [[ $# != 2 || -e $2 || -L $2 ]]; then
-    echo "Usage: $0 [--hotplug] INSTALLED_BOOT_DIR NEW_OUTPUT_DIR" >&2; exit 2
+    echo "Usage: $0 [--hotplug|--ic10irq] INSTALLED_BOOT_DIR NEW_OUTPUT_DIR" >&2; exit 2
 fi
 here=$(cd "$(dirname "$0")" && pwd)
 base=$(realpath "$1")
@@ -25,22 +27,29 @@ import sys
 
 menu = Path(sys.argv[1])
 text = menu.read_text()
-entries = re.findall(r"\nmenuentry 'Debian 13 - Battery read-only test \(Samsung\)' --id battery-ro \{.*?\n\}", text, re.S)
 mode = sys.argv[3]
-if mode == "hotplug":
-    title, flag, service = "USB-C hotplug 12 V test", "hotplug", "np545-pd-hotplug"
+base_name = "Battery read-only test (Samsung)' --id battery-ro"
+base_diag = "battery"
+if mode == "ic10irq":
+    base_name = "USB-C hotplug 12 V test (Samsung)' --id hotplug"
+    base_diag = "hotplug"
+    title, service = "IC10 GPIO IRQ trace", "np545-ic10-irq"
+elif mode == "hotplug":
+    title, service = "USB-C hotplug 12 V test", "np545-pd-hotplug"
     if text.count("--id keepcharge ") != 1:
         sys.exit("Expected the installed BQ25710 keepalive menu")
 else:
-    title, flag, service = "BQ25710 charge keepalive test", "keepcharge", "np545-charge-keepalive"
-if (len(entries) != 1 or f'np545.{flag}=1' in text or f'--id {mode} ' in text
+    title, service = "BQ25710 charge keepalive test", "np545-charge-keepalive"
+entries = re.findall(r"\nmenuentry '" + re.escape(base_name) + r" \{.*?\n\}", text, re.S)
+if (len(entries) != 1 or f'np545.{mode}=1' in text or f'--id {mode} ' in text
         or f'devicetree /boot/battery-{sys.argv[2]}.dtb' not in entries[0]
         or entries[0].count('systemd.wants=np545-charge-observe.service') != 1):
-    sys.exit('Expected the installed read-only charge diagnostic entry')
-trial = entries[0].replace("Battery read-only test (Samsung)' --id battery-ro",
-                           f"{title} (Samsung)' --id {mode}")
-trial = trial.replace('set diag_entry=Debian-battery', f'set diag_entry=Debian-{mode}')
-trial = trial.replace('np545.battery=1', f'np545.battery=1 np545.{flag}=1 systemd.wants={service}.service')
+    sys.exit('Unexpected base entry')
+if mode == "ic10irq" and entries[0].count("np545.hotplug=1 systemd.wants=np545-pd-hotplug.service") != 1:
+    sys.exit("Expected the existing hotplug service")
+trial = entries[0].replace(base_name, f"{title} (Samsung)' --id {mode}")
+trial = trial.replace(f'set diag_entry=Debian-{base_diag}', f'set diag_entry=Debian-{mode}')
+trial = trial.replace('np545.battery=1', f'np545.battery=1 np545.{mode}=1 systemd.wants={service}.service')
 with menu.open('a') as out:
     out.write(trial + '\n')
     out.write("""
