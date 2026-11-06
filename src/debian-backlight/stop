@@ -1,0 +1,8 @@
+#!/bin/sh
+# Disarm lid events and restore the saved PWM before removing the module.
+set -eu
+module=np545_sleep_backlight
+control=/sys/bus/platform/devices/c440000.spmi:pmic@5:pwm/disarm
+[ -d "/sys/module/$module" ] || exit 0
+printf '%s\n' 1 > "$control"
+exec /usr/sbin/modprobe -r "$module"
