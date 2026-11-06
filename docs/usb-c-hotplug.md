@@ -61,3 +61,23 @@ sudo journalctl -b -t np545-charge -o cat
 EMEC 的六个 GpioInt 按资源顺序为 704、26、41、768、81、42。通过本机 GIO0 的中断资源表、DT 中 PDC 的范围和 SC8180x 引脚映射表，704 / 64 = 11 → GSI 588 → SPI 556 → PDC 76 → GPIO101；768 / 64 = 12 → GSI 599 → SPI 567 → PDC 87 → GPIO119。其余四条为直接编号。本机三星 EmuEC.sys 在 RVA `0x7ab8` 分两组注册中断；组内第一项的回调 `0x7d70` 经 `0x8ae8` 和 `0x1cfe8` 进入 PD 处理函数 `0xfec0`。这是定位 GPIO101 的固件依据，实际边沿另行对照。[板上 DSDT](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L93774) · [Qualcomm 虚拟引脚说明](https://marc.info/?l=devicetree&m=178272904036845&w=3) · [Linux v7.0 SC8180x 引脚表](https://github.com/torvalds/linux/blob/v7.0/drivers/pinctrl/qcom/pinctrl-sc8180x.c) · [三星驱动包](https://github.com/tordona/woa-device-drivers/releases/tag/samsung-np545xla-drivers)
 
 在 ARM64 构建机运行 `src/build-debian-battery.sh "$work/obj" "$work/artifacts" output/ic10irq` 和 `src/build-keepcharge-boot.sh --ic10irq output/hotplug/boot output/ic10irq/boot`。U 盘已安装上一版热插包时，仅需安装新增的 `np545xla-ic10-irq` 及其 Debian 依赖 `python3-libgpiod`，然后运行 `sudo systemctl daemon-reload` 和 `sudo bash install-daily-boot.sh --battery-ic10irq boot manifest.txt`。通过 `sudo journalctl -b -t np545-ic10-irq -o cat` 查看内核边沿时间、线电平、IRQ 计数及 IC10 状态，使用同一启动的 BOOTTIME 对齐 `np545-hotplug` 和 `np545-charge` 记录。
+
+### 真机确认 GPIO101（2026-11-06）
+
+原充电线拔出约 15 秒后插回原口，U 盘、集线器和以太网全程保持连接。启动 ID 为 `b0a7e65d-5c88-47df-b805-7a17dc7d18d9`。IC10 的 S2MM005 PD 中断对应 **TLMM GPIO101 / PDC76**，本次 Linux 分配 IRQ 177。开始监听时五条候选输入均为高电平，计数为零。GPIO119 已用于 894000.i2c 的 QUP5 功能，只记录了其复用和占用情况。
+
+下表时间为本次开机以来的秒数。第一列为内核记录下降沿的时刻，最后一列是随后读完 IC10 状态的时刻；两者采用同一启动时钟。
+
+| 下降沿（秒） | GPIO | 读到的 IC10 状态 | 读取完成（秒） |
+| ---: | ---: | --- | ---: |
+| 856.670 | 26 | 仍报告第 3 档 12 V / 3 A | 856.693 |
+| 856.699 | **101** | 已脱离，未连接 | 856.719 |
+| 871.680 | **101** | 已重新接入，用电端等待源能力 | 871.701 |
+| 871.967 | **101** | Sink_Ready，第 1 档 5 V / 3 A | 871.989 |
+| 872.482 | **101** | Sink_Ready，第 3 档 12 V / 3 A | 872.503 |
+
+测试程序在 872.322 秒请求 12 V。此后线缆保持连接，GPIO101 出现第 4 个下降沿，随即读回 12 V；GPIO26 在这段协商期间没有新的计数。GPIO101、26、41、81、42 的内核计数增量分别为 **4、1、0、0、0**，与逐条边沿记录一致，事件序号连续。GPIO101 的四次边沿分别跟随脱离、重新接入、5 V 就绪、12 V 就绪，且与三星固件的中断资源顺序相符。GPIO26 的其他用途仅靠本次拔插无法确定。
+
+原热插程序在 873.581 和 918.919 秒两次读回 1,024 mA，间隔 45.338 秒；第二次刷新时电池实测 +904 mA。保持 12 V 时，最后采到 GPIO101 为低电平；本轮记录器没有读清或写清 PD 中断，再触发及清中断流程仍需单独验证。停止监听后，五条输入均已释放，GPIO119 继续由原 I²C 设备占用。完整记录位于构建机的 `output/ic10irq/irq.jsonl`、`hotplug.jsonl`、`charge.jsonl` 和 `domains.txt`。
+
+五个一次性引导标记均已清零，原热插程序和续充程序的文件摘要复核通过。机器已正常重启回默认 Adreno 日用项（启动 ID `97f6503b-3082-46dc-9511-171b7e2cede6`），LightDM 活动，五个测试服务均为 inactive。记录见 `output/ic10irq/return.txt` 和 `output/ic10irq/daily-confirmed.txt`。
