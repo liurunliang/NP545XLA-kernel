@@ -127,7 +127,7 @@ class StartupTests(unittest.TestCase):
 
     def test_full_boot_then_real_detach_and_attach_can_charge(self):
         self.poll.side_effect = [self.five, self.twelve]
-        self.pack.side_effect = [self.full, self.hungry, self.hungry]
+        self.pack.side_effect = [self.full, self.full, self.hungry, self.hungry]
         self.events.next.side_effect = [self.event(detached=True), self.event()]
         self.run_policy()
         self.charge.assert_called_once()
@@ -216,6 +216,63 @@ class StartupTests(unittest.TestCase):
         self.sink.check.side_effect = lambda *a: self.stop.set()
         self.run_policy()
         self.assert_no_power_write()
+
+    def test_full_replug_restores_input_without_writing_charge_current_or_voltage(self):
+        self.regs.update({0x15: 8400, 0x20: 0, 0x22: 0x4100, 0x3f: 0x4100})
+        self.pack.return_value = self.full
+        self.poll.side_effect = [self.five, self.twelve, self.twelve]
+        self.sink.switches.return_value = 0
+        edges = [self.event()]
+        self.events.next.side_effect = lambda timeout: edges.pop() if edges else self.finish(timeout)
+        def consumer(on):
+            self.sink.switches.return_value = int(on)
+            self.regs[0x20] = 0x8000 if on else 0
+        self.sink.consumer.side_effect = consumer
+        def limit(chip, payload):
+            self.assertEqual(payload, bytes.fromhex("3f 00 3c"))
+            self.regs[0x3f] = self.regs[0x22] = 0x3c00
+        with patch.object(hp, "send", side_effect=limit) as send:
+            self.run_policy()
+        self.sink.select.assert_called_once_with(hp.profile(self.five))
+        self.assertEqual([c.args for c in self.sink.consumer.call_args_list], [(True,), (False,)])
+        send.assert_called_once()
+        self.chip.set_current.assert_not_called()
+        self.charge.assert_not_called()
+        self.assertEqual((self.regs[0x14], self.regs[0x15]), (0, 8400))
+
+    def test_full_input_cannot_replace_another_power_path(self):
+        self.pack.return_value = self.full
+        self.sink.switches.return_value = 0
+        with self.assertRaisesRegex(cs.StopCharge, "different path"):
+            self.run_policy()
+        self.assert_no_power_write()
+
+    def test_full_input_rechecks_battery_before_opening_switch(self):
+        self.pack.side_effect = [self.full, self.full, self.hungry]
+        self.regs[0x20] = 0
+        self.sink.switches.return_value = 0
+        with self.assertRaisesRegex(cs.StopCharge, "before input enable"):
+            self.run_policy()
+        self.assert_no_power_write()
+
+    def test_full_input_write_failure_closes_only_owned_consumer(self):
+        self.pack.return_value = self.full
+        self.regs[0x20] = 0
+        self.sink.switches.return_value = 0
+        self.sink.consumer.side_effect = [OSError("switch readback failed"), None]
+        with self.assertRaisesRegex(OSError, "switch readback failed"):
+            self.run_policy()
+        self.assertEqual([c.args for c in self.sink.consumer.call_args_list], [(True,), (False,)])
+        self.chip.set_current.assert_not_called()
+
+    def test_8400mv_is_accepted_only_for_zero_current_standby(self):
+        self.regs[0x15] = 8400
+        self.chip.settings(0, voltage=8400)
+        for expected, voltage in ((1024, 8400), (0, 8800)):
+            with self.assertRaisesRegex(cs.StopCharge, "unsupported voltage"):
+                self.chip.settings(expected, voltage=voltage)
+        with self.assertRaisesRegex(cs.StopCharge, "voltage limit"):
+            self.chip.settings(0)
 
 
 if __name__ == "__main__":

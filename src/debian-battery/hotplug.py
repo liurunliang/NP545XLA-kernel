@@ -126,13 +126,17 @@ class InputCharger(Charger):
             raise StopCharge(f"BQ fault, VAP or OTG: {status:#06x}")
         return bool(status & 0x8000)
 
-    def settings(self, expected):
+    def settings(self, expected, *, voltage=FIRMWARE_MV):
+        # 8400 mV is accepted only for a zero-current input-only state. Active
+        # charging still requires the measured 8760 mV firmware configuration.
+        if voltage not in (8400, FIRMWARE_MV) or (voltage != FIRMWARE_MV and expected):
+            raise StopCharge("unsupported voltage and charge target")
         self.identify()
-        if (self.word(0x12), self.word(0x15), self.word(0x14)) != (0xe70e, FIRMWARE_MV, expected):
+        if (self.word(0x12), self.word(0x15), self.word(0x14)) != (0xe70e, voltage, expected):
             raise StopCharge("charger option, pack voltage limit or charge target changed")
 
-    def limit_input(self):
-        self.settings(0)
+    def limit_input(self, *, voltage=FIRMWARE_MV):
+        self.settings(0, voltage=voltage)
         host = self.word(0x3f)
         if host == 0x4100:  # power-on default; only lower it to the measured firmware limit
             send(self, bytes.fromhex("3f 00 3c"))
