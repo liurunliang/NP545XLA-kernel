@@ -14,6 +14,9 @@ from keepcharge import (Charger, FIRMWARE_MA, FIRMWARE_MV, StopCharge, log, pack
                         stopping, uptime)
 from np545_charge_observe import BATTERY, DT, Message, Registers, Transfer, port
 
+# Measured firmware presets: unplugged boot and the original powered handoff.
+FIRMWARE_CHARGE = {8696: 2880, FIRMWARE_MV: FIRMWARE_MA}
+
 
 def send(chip, payload):
     data = (C.c_uint8 * len(payload)).from_buffer_copy(payload)
@@ -128,8 +131,8 @@ class InputCharger(Charger):
 
     def settings(self, expected, *, voltage=FIRMWARE_MV):
         # 8400 mV is accepted only for a zero-current input-only state. Active
-        # charging still requires the measured 8760 mV firmware configuration.
-        if voltage not in (8400, FIRMWARE_MV) or (voltage != FIRMWARE_MV and expected):
+        # charging uses one of the two measured firmware voltage ceilings.
+        if voltage not in (8400, *FIRMWARE_CHARGE) or (voltage == 8400 and expected):
             raise StopCharge("unsupported voltage and charge target")
         self.identify()
         if (self.word(0x12), self.word(0x15), self.word(0x14)) != (0xe70e, voltage, expected):
@@ -138,7 +141,9 @@ class InputCharger(Charger):
     def limit_input(self, *, voltage=FIRMWARE_MV):
         self.settings(0, voltage=voltage)
         host = self.word(0x3f)
-        if host == 0x4100:  # power-on default; only lower it to the measured firmware limit
+        # Callers have verified a live 3 A contract before changing an
+        # observed USB (450 mA) or reset (3250 mA) limit to the board's 3 A limit.
+        if host in (0x0900, 0x4100):
             send(self, bytes.fromhex("3f 00 3c"))
             time.sleep(0.05)
         self.check_limits()
@@ -201,10 +206,10 @@ def contract(voltage):
     return pd if pd.get("requested_mV") == voltage and pd.get("requested_mA") == 3000 else None
 
 
-def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0):
+def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0, voltage=FIRMWARE_MV):
     # The startup policy can also take over the measured firmware-started
     # charge. All other callers still require a zero target after a replug.
-    if initial_current not in (0, FIRMWARE_MA):
+    if voltage not in FIRMWARE_CHARGE or initial_current not in (0, FIRMWARE_CHARGE[voltage]):
         raise StopCharge("unknown initial charge target")
     if wait is None:
         wait = stopping.wait
@@ -213,7 +218,7 @@ def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0):
     try:
         sink.check(known, 12000)
         pack_target(pack(), starting=initial_current == 0)
-        chip.settings(initial_current)
+        chip.settings(initial_current, voltage=voltage)
         present = chip.input_present()
         enabled = sink.switches()
         log("input-before", ac=present, consumer=enabled)
@@ -222,7 +227,7 @@ def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0):
         if not enabled:
             if present:
                 raise StopCharge("BQ already supplied through a different path")
-            chip.limit_input()
+            chip.limit_input(voltage=voltage)
             sink.check(known, 12000)
             switch_owned = True
             sink.consumer(True)
@@ -230,7 +235,7 @@ def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0):
         if initial_current:
             chip.check_limits()
         else:
-            chip.limit_input()
+            chip.limit_input(voltage=voltage)
         expected = initial_current
         last = None
         positive = False
@@ -244,7 +249,7 @@ def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0):
                 raise
             if not chip.input_present():
                 return  # stop; only a confirmed detach can arm the next connection
-            chip.settings(expected)
+            chip.settings(expected, voltage=voltage)
             chip.check_limits()
             battery = pack()
             now = uptime()

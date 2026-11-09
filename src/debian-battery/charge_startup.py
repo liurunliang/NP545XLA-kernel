@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Opt-in IC10 startup policy for the original 12 V / 3 A source."""
-from hotplug import (FIRMWARE_MA, FIRMWARE_MV, StopCharge, charge_after_replug, is_detached, log,
+from hotplug import (FIRMWARE_CHARGE, FIRMWARE_MV, StopCharge, charge_after_replug, is_detached, log,
                      pack, pack_target, poll_port, profile, stopping, uptime, wait_for)
 
 
@@ -24,8 +24,8 @@ def check_role(pd):
 
 def initialize_voltage(sink, chip, known):
     voltage = chip.word(0x15)
-    if voltage == FIRMWARE_MV:
-        return
+    if voltage in FIRMWARE_CHARGE:
+        return voltage
     sink.check(known, 12000)
     battery = pack()
     pack_target(battery, starting=True)
@@ -39,6 +39,7 @@ def initialize_voltage(sink, chip, known):
     chip.restore_firmware_voltage()
     log("voltage-initialized", previous_mV=8400, readback_mV=FIRMWARE_MV,
         charge_target_mA=0, **battery)
+    return FIRMWARE_MV
 
 
 class FullInput:
@@ -131,7 +132,7 @@ def _recover_startup(events, sink, chip, standby):
             if event and event.detached:
                 battery = wait_for("battery discharge after GPIO101 detach", discharging_pack, 3, delay=0.1)
                 standby.detached()
-                if chip.word(0x14) == FIRMWARE_MA and not chip.input_present():
+                if chip.word(0x14) in FIRMWARE_CHARGE.values() and not chip.input_present():
                     chip.set_current(0)
                 log("detached", seq=event.seq, **battery)
                 armed, requested, deadline = True, False, None
@@ -167,6 +168,7 @@ def _recover_startup(events, sink, chip, standby):
             battery = pack()
             chip.identify()
             current = chip.word(0x14)
+            charge_voltage = chip.word(0x15)
             full = full_idle(battery)
             if full:
                 if current != 0:
@@ -178,21 +180,29 @@ def _recover_startup(events, sink, chip, standby):
                 if stopping.is_set():
                     return
 
+            if current and current != FIRMWARE_CHARGE.get(charge_voltage):
+                raise StopCharge("unknown initial charge target")
+            if current and not chip.input_present() and battery["current_now"] < 0:
+                # Firmware can program a target even while no adapter supplies
+                # the BQ. Clear that known, inactive preset before negotiation.
+                chip.settings(current, voltage=charge_voltage)
+                chip.set_current(0)
+                log("inactive-firmware-target-cleared", previous_mA=current,
+                    charge_voltage_mV=charge_voltage)
+                current = 0
             if not full:
                 pack_target(battery, starting=current == 0)
-            if current not in (0, FIRMWARE_MA):
-                raise StopCharge("unknown initial charge target")
             if voltage == 12000:
                 if stopping.wait(0.5):
                     return
                 sink.check(known, 12000)
                 if current == 0:
-                    initialize_voltage(sink, chip, known)
+                    charge_voltage = initialize_voltage(sink, chip, known)
                 if stopping.is_set():
                     return
                 log("charge-ready", seq=events.seq, previous_mA=current, pd=pd)
                 charge_after_replug(sink, chip, known, wait=events.wait_charging,
-                                    initial_current=current)
+                                    initial_current=current, voltage=charge_voltage)
                 armed, requested, deadline = False, False, None
                 continue
             if current:

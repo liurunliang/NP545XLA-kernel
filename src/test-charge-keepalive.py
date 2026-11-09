@@ -239,7 +239,8 @@ class HotplugTests(unittest.TestCase):
         battery = dict(flags=0x80, capacity=93, temp=301, voltage_now=8450000,
                        constant_charge_voltage_max=8860000, constant_charge_current_max=4256000,
                        current_now=900000)
-        def settings(expected):
+        def settings(expected, *, voltage):
+            self.assertEqual(voltage, 8760)
             self.assertEqual(regs[0x14], expected)
         def write(current):
             regs[0x14] = current
@@ -278,10 +279,46 @@ class HotplugTests(unittest.TestCase):
 
     def test_unknown_handoff_current_is_rejected_before_hardware_access(self):
         sink, chip = Mock(), Mock()
-        with self.assertRaisesRegex(hp.StopCharge, "unknown initial"):
-            hp.charge_after_replug(sink, chip, hp.profile(self.twelve), initial_current=2048)
+        for current, voltage in ((2048, 8760), (3776, 8696), (2880, 8760), (0, 8400)):
+            with self.subTest(current=current, voltage=voltage), self.assertRaisesRegex(hp.StopCharge, "unknown initial"):
+                hp.charge_after_replug(sink, chip, hp.profile(self.twelve), initial_current=current, voltage=voltage)
         self.assertEqual(sink.mock_calls, [])
         self.assertEqual(chip.mock_calls, [])
+
+    def test_lower_firmware_voltage_survives_all_refreshes(self):
+        for initial in (0, 2880):
+            with self.subTest(initial=initial), ExitStack() as stack:
+                sink, chip = Mock(), Mock()
+                sink.switches.return_value = 1
+                chip.input_present.return_value = True
+                stop = hp.stopping.__class__()
+                clock, current, writes = [0], [initial], []
+                battery = dict(flags=0x80, capacity=94, temp=295, voltage_now=8450000,
+                               constant_charge_voltage_max=8860000, constant_charge_current_max=4256000,
+                               current_now=900000)
+                def settings(expected, *, voltage):
+                    self.assertEqual(voltage, 8696)
+                    self.assertEqual(current[0], expected)
+                def write(ma):
+                    current[0] = ma
+                    writes.append((clock[0], ma))
+                def tick(seconds):
+                    clock[0] += seconds
+                    if clock[0] == 91:
+                        stop.set()
+                    return stop.is_set()
+                chip.settings.side_effect = settings
+                chip.set_current.side_effect = write
+                for name, value in dict(stopping=stop, pack=lambda: battery,
+                                        uptime=lambda: clock[0], log=Mock()).items():
+                    stack.enter_context(patch.object(hp, name, value))
+                hp.charge_after_replug(sink, chip, hp.profile(self.twelve), wait=tick,
+                                      initial_current=initial, voltage=8696)
+                self.assertEqual(writes, [(0, 1024), (45, 1024), (90, 1024), (91, 0)])
+                if initial == 0:
+                    chip.limit_input.assert_called_once_with(voltage=8696)
+                else:
+                    chip.limit_input.assert_not_called()
 
     def test_handoff_write_failure_still_attempts_zero_current(self):
         sink, chip = Mock(), Mock()

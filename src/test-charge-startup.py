@@ -81,12 +81,12 @@ class StartupTests(unittest.TestCase):
         self.run_policy()
         self.events.next.assert_not_called()
         self.charge.assert_called_once_with(self.sink, self.chip, hp.profile(self.twelve),
-                                           wait=self.events.wait_charging, initial_current=3776)
+                                           wait=self.events.wait_charging, initial_current=3776, voltage=8760)
 
     def test_boot_12v_zero_target_can_start_only_after_all_charge_checks(self):
         self.run_policy()
         self.charge.assert_called_once_with(self.sink, self.chip, hp.profile(self.twelve),
-                                           wait=self.events.wait_charging, initial_current=0)
+                                           wait=self.events.wait_charging, initial_current=0, voltage=8760)
 
     def test_full_boot_at_5_or_12v_keeps_monitoring_without_changing_8400mv(self):
         for pd in (self.five, self.twelve):
@@ -325,6 +325,35 @@ class StartupTests(unittest.TestCase):
         with patch.object(hp, "send") as send:
             cs.initialize_voltage(self.sink, self.chip, hp.profile(self.twelve))
         send.assert_not_called()
+
+    def test_unplugged_firmware_voltage_is_preserved(self):
+        self.regs.update({0x15: 8696, 0x3f: 0x0900, 0x22: 0x0900})
+        with patch.object(hp, "send") as send:
+            self.run_policy()
+        send.assert_not_called()
+        self.charge.assert_called_once_with(self.sink, self.chip, hp.profile(self.twelve),
+                                           wait=self.events.wait_charging, initial_current=0, voltage=8696)
+
+    def test_inactive_unplugged_firmware_target_is_cleared_before_negotiation(self):
+        self.regs.update({0x14: 2880, 0x15: 8696, 0x20: 0, 0x3f: 0x0900, 0x22: 0x0900})
+        self.poll.side_effect = [self.five, self.twelve]
+        self.events.next.side_effect = lambda timeout: self.event()
+        self.chip.set_current.side_effect = lambda ma: self.regs.__setitem__(0x14, ma)
+        self.run_policy()
+        self.chip.set_current.assert_called_once_with(0)
+        self.sink.select.assert_called_once_with(hp.profile(self.twelve))
+        self.charge.assert_called_once_with(self.sink, self.chip, hp.profile(self.twelve),
+                                           wait=self.events.wait_charging, initial_current=0, voltage=8696)
+
+    def test_observed_usb_input_limit_can_be_updated_with_current_zero(self):
+        self.regs.update({0x15: 8696, 0x3f: 0x0900, 0x22: 0x0900})
+        def limit(chip, payload):
+            self.assertEqual(payload, bytes.fromhex("3f 00 3c"))
+            self.regs[0x3f] = self.regs[0x22] = 0x3c00
+        with patch.object(hp, "send", side_effect=limit) as send:
+            self.chip.limit_input(voltage=8696)
+        send.assert_called_once()
+        self.assertEqual((self.regs[0x14], self.regs[0x15]), (0, 8696))
 
 
 if __name__ == "__main__":
