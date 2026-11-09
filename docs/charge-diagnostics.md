@@ -85,3 +85,198 @@ src/build-charge-boot.sh output/battery/boot output/charge/boot
 本轮未安装或启动 ADSP，未改写充电芯片，未验证任何 GLINK 请求回复。结论限定于已核验原厂包中的两版固件；其他未知版本或固件内部动态机制不在已验证范围。参考固件的存在不构成本机可用性证据。
 
 可复核证据归档在 `output/charge-startup-20261109/qcom-battmgr/`：`live-platform.json`、`segment-comparison.json`、`adsp-comparison.json`、归档目录与哈希、解码后的 INF 和接口字符串位置。`inspect-firmware.py IMAGE...` 可重新读取 ELF 程序头并定位标识；`collect-live.py` 仅读取运行状态。原厂大归档继续复用 `output/gpu-firmware/NP545XLA.7z`，未向 Git 提交固件二进制。
+
+## 睡眠充电前的硬件职责核查（2026-11-09）
+
+当前证据支持由主机实施充电策略，尚不能确认本机存在可在主机睡眠后完整接管的硬件或固件。BQ25710 可以独立维持设定的恒流/恒压，但满充停充、再充和电池温度策略另有负责者。是否采用内核定期唤醒，应在核实电池包和原厂睡眠路径后决定。
+
+### 已确认的边界
+
+| 部件 | 已确认职责 | 不能据此推出的能力 |
+| --- | --- | --- |
+| S2MM005，IC10 / IC19，0x33 | USB-C/PD 协议状态、PDO 请求、Consumer Switch 控制；原端口已有 Linux 实测 | 不能由 PD 就绪推断电池正在充电，也未证明它能代管 IC20 的充电策略 |
+| BQ25710，IC20，0x09 | 恒流/恒压、电源路径、输入限制、芯片故障保护、通信看门狗 | 没有自动读取 SBS 电池或独立执行整套电池充电策略的证据 |
+| 智能电池 SDI 4432D53，IC20，0x0b | 真机读出身份、温度、状态、容量及请求电流/电压；观察到满充/终止充电标志 | 上报满充或过温与直接切断充电是不同能力；包内芯片、独立保护阈值及接线尚未识别 |
+| Samsung EmuEC.sys | 原厂代码内存在电池型号匹配、温度检查、满充停充、再充和目标刷新；已定位 WDF 定时器与 D0 电源回调 | 静态代码不能证明 Windows 实际睡眠状态，或其他固件是否接管 |
+
+TI 手册第 9.4.1.2 节明确将满充或不适宜充电时的终止交给 host：设置禁止位或把电流写为零。第 9.5.1 节说明 BQ25710 仅作 SMBus 从设备，不主动发起通信。第 9.3.10.8 节的 155°C 热关断针对芯片结温；引脚表没有专用电池 NTC/TS 输入，不能替代电池温度管理。第 9.3.10.1 节允许关闭看门狗，但这仅取消失联停充条件。[TI BQ25710 Rev. B](https://www.ti.com/lit/ds/symlink/bq25710.pdf)
+
+### 原厂代码的可复核证据
+
+本轮检查原厂包中 `emuec.inf_arm64_dcadbca96f4e5604/EmuEC.sys`，SHA256 为 `70de2be234da9d34125b4409f1272f8e74b2a7f1f1c651f9f09548823cb58bb9`。以下均为 RVA，镜像基址 `0x140000000`。函数名依据相邻日志字符串定位，再核对分支和调用；不只依据字符串存在作结论。
+
+- `ChargerInit`（`0x144b0`）：TI 厂商分支给保存的 ChargeOption0 赋值 `0xe70e` / `0xe70c`，随后经 `0x17ac8` 写寄存器 `0x12`；两值的看门狗位均为 `11b`。对应标称 175 秒，手册容差范围为 140–210 秒，不能把 175 秒当作保证最短时间。
+- `RefreshCharger`（`0x14ec8`）：活动充电分支累加计数，到 30 后重新写 `0x14`、`0x15`；另一分支检查电流被清零后的恢复。它由下述定时回调调用，名义刷新间隔约 30 秒，但定时器允许延迟，不应当作严格周期。
+- `checkBattStatus`（`0x13318`）：检查缓存电池状态 bit 5 后，通过 `chargeSignal`（`0x13770`）派发停充。`SetChargerStop`（`0x14d60`）的 BQ25710 分支将 `0x14` 写为零。
+- `checkBattTemp`（`0x13490`）：读取缓存温度，超出允许区间时进入上述停充派发；读数为 `0xffff` 的分支则请求重读并返回失败，该分支本身没有派发停充。`BattMaincharge`（`0x13bc8`）调用该检查；`battTrickleCharge`（`0x13a20`）包含温度恢复和容量阈值再充分支。以下补充具体控制流，不能把所有“检查失败”都理解为立即写零。
+- `checkDeviceName`（`0x13070`）：从 `0x2b620` 的型号表选择 `0x2b650` 起的参数行，其电压字段进入 `SetChargerMain` 的处理路径。表中 `4432D53`、`4432W53`、`4432D50` 对应 8,760 mV，`4402D51` 对应 8,696 mV。真机现已读出 `4432D53`，与第一行相符；这仍不构成将现有 8,696 mV 设置抬高的理由，后续还存在策略调整与寄存器量化。
+
+反汇编和提取表保存在本调查工作树 `output/hardware-boundary/`：`emuec.disasm.txt`、`emuec-xrefs.json`、`emuec-charging-excerpts.txt`、`emuec-battery-profiles.json`。这些是分析产物，未作为驱动代码提交。
+
+### 原厂满充、再充和异常处理的进一步核查
+
+以下是同一 EmuEC 样本的静态行为，不是新增真机测试，也不是已经批准的 Linux 参数。温度使用原厂的 `2731` 偏移折算，摄氏值取近似值。
+
+| 场景 | 原厂控制流 | 对后续适配的含义 |
+| --- | --- | --- |
+| 运行中充满 | `checkBattStatus(0x13318)` 检查满充状态或软件容量上限，将状态置为 `0x20`、目标派发置零，调用停充；`mainBattCharCtrl(0x13c90)` 后续仍处理这个状态 | 停充后进入等待，管理任务继续运行；正常充满不应导致管理器退出 |
+| 电量下降后再充 | `battTrickleCharge(0x13a20)` 先检查温度，再比较缓存 SOC。默认分支阈值为 96 或 97，取决于上下文 `+0x117`；容量上限模式改用 `+0xce9`。满足条件后重新进入充电，先派发预充目标，再由主充路径初始化 | 存在容量回差和恢复检查；SOC 经 `ModifyRSOC` 处理，模式字段含义尚未全部厘清，不能直接把 96/97 当作 Linux 阈值 |
+| 温度不合适 | 主充检查允许原始值 `2731–3231`，约 0–50°C；越界置温度故障并停充。等待/故障恢复使用 `2781–3181`，约 5–45°C | 停充范围与恢复范围不同，有意避免阈值附近反复启停；保留当前 Linux 更保守的范围 |
+| 温度改变充电目标 | `CheckBatteryTemp(0x15370)` 在主充状态 `0x11` 下执行高低温分档。高温分支约 41°C 进入、39°C 及以下退出；目标还取决于缓存单体数据和状态位，低温另有多档 | 原厂温控不仅是一个温度开关；需要区分停充、降流/降压、恢复，不能只复制型号表中的最高电压 |
+| 电源或电池离线 | 主控制器发现 AC 或电池存在标志缺失后清状态，并派发停充 | PD/输入、电池存在状态必须共同约束目标 |
+| 充电计数耗尽 | 主控制器递减计数，归零后进入 `0x80` 停充状态；不同路径写入 7,200、18,000、64,800 等初值 | 这些是执行次数计数；分支和调度可推迟递减，不能直接声称是严格的墙上时钟超时 |
+
+**定时器频率不等于电池采样频率。** `SendBatteryMessage(0x17e38)` 先执行恢复、错误检查及 `RefreshCharger`，随后调用普通轮询，最后调用主充控制和温度分档。`GetBattData(0x12030)` 只是读取缓存，在该函数内没有 I²C 读取或采样时间检查。普通轮询 `BatteryPolling(0x12a40)` 每累计 7 次调用才读取一个选中项；初始化在 `0x12268` 写入掩码 `0x3e40`，选择 SOC、电压、循环次数、电池状态、电流和温度六项。因此常规路径名义上约 42 次定时回调完成一轮，并非每秒更新全部数据；初始化、恢复和调度延迟会改变实际时序。这是静态推导，尚无 Windows 总线时序实测。
+
+通信失败也不能概括为“原厂立即停充”：普通读取失败会设置恢复标志和重试计数，暂时保留旧缓存；`CheckRecover(0x125b8)` 的重试耗尽路径才将温度、状态等缓存置为 `0xffff`，另有容量/设计字段使用回退值。温度检查遇到 `0xffff` 时请求恢复并返回失败，调用者跳过余下检查；该分支自身没有写零。由于刷新位于本轮普通采样及策略检查之前，**尚未证明整个驱动对持续通信故障具有怎样的停充上限**。后续 Linux 应明确新鲜采样、最大允许数据年龄、失败停充和恢复条件，而不是照搬这个缓存及重试实现。
+
+`CheckBatteryError(0x12db8)` 还轮换读取厂商命令 `0x00` / `0x90`，分别检查 `(word & 0x0f00) == 0x0900`、bit 1，并使用四次确认计数；日志将其关联到永久故障/不平衡。它表明原厂还使用包内厂商状态，不能证明这些故障已经由包内 FET 独立处理。TI 的 [bq3055 手册 A.1.1.6](https://www.ti.com/lit/ug/sluu440/sluu440.pdf) 有相似的状态字段和 FET 编码，但本机没有芯片身份读数，且 `0x90` 的含义没有由该手册确认，**不能据此认定电池包使用 bq3055**。本轮没有向电池发送这些厂商操作。
+
+可复核产物：`output/hardware-boundary/emuec-policy-excerpts.txt` 与 `emuec-policy-boundary.json`，包含函数范围、默认轮询表、阈值原始值及未验证项。
+
+### 原厂定时任务与电源回调
+
+依据微软公开 [KMDF 1.17 函数表](https://github.com/microsoft/Windows-Driver-Frameworks/blob/main/src/publicinc/wdf/kmdf/1.17/wdffuncenum.h) 和 [回调结构定义](https://github.com/microsoft/Windows-Driver-Frameworks/blob/main/src/publicinc/wdf/kmdf/1.17/wdfdevice.h)，对间接调用进行解析，避免把控制流保护检查误认为实际驱动调用：
+
+- `0x4f048` 注册 `EvtDeviceD0Entry=0x5dc0`、`EvtDeviceD0Exit=0x6180`、`EvtDeviceSelfManagedIoInit=0x6670`；SelfManagedIoSuspend/Restart 字段为零。
+- `0x20c48` 创建三个 WDF timer。第一个回调为 `0x20e20`，Period 为 0，TolerableDelay 为 1,000 ms。`0x6898` 初次启动使用 `-300000000` 个 100 ns，即名义 30 秒；回调在 `0x20f58` 使用 `-10000000` 自行重启，即名义 1 秒。它接着调用 `SendBatteryMessage(0x17e38)`，后者调用 `RefreshCharger`。这是调用调度证据，不是每秒获得一份新电池采样的实测证据。[WDF_TIMER_CONFIG](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdftimer/ns-wdftimer-_wdf_timer_config)
+- D0Exit 经 `0x61e8` 在 `0x6468–0x64bc` 对三个 timer 执行 `WdfTimerStop(..., TRUE)`，随后关闭 I/O target。已跟踪的普通路径未发现把 BQ 看门狗关闭或将充电移交给另一控制器的操作。存在条件性的电池切断命令分支，不能当作普通睡眠交接。
+- `0x6828` 注册的电源通知 GUID 是 `GUID_CONSOLE_DISPLAY_STATE`，回调 `0x20410` 处理屏幕关闭、开启和变暗；它不是完整的系统睡眠通知。
+- D0Entry/D0Exit 所调的 `0x507f0` / `0x509a8` 主要修改上下文字段。驱动另有 PoFx 注册和性能状态调用；这些调用本身不能证明充电交接。
+
+**设备 D0 退出、Windows Modern Standby、屏幕关闭需要分别验证。** D0Exit 在多种设备电源/PnP 场景执行；代码中停止 timer 不能直接推出每次合盖都停止充电，也不能证明休眠或关机期间如何充电。[微软 D0Exit 定义](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdfdevice/nc-wdfdevice-evt_wdf_device_d0_exit)
+
+新增分析产物为 `emuec-wdf-methods.json`、`emuec-import-xrefs.json`、`emuec-power-excerpts.txt`、`emuec-power-constants.json`，均位于 `output/hardware-boundary/`。
+
+### ACPI 与原 Windows 睡眠能力记录
+
+继续核查了仓库已有的原厂表和 Windows 枚举记录，未为此切换操作系统：
+
+- `facp.dat` 长 276 字节，长度字段一致，校验和为零；Flags=`0x00300000`，即 Hardware Reduced 与 Low Power S0 Idle 均置位，ARM boot flags=`0x0001`，声明通过 SMC 使用 PSCI。文件 SHA256 为 `15b75401cc28fb1c8aba1337da155bec520b3df46d477fe40f72425dabc74be7`。
+- `hw-enum.txt` 中 **2026-05-22 17:35:57 的历史 Windows 输出**列出 `Standby (S0 Low Power Idle) Network Connected`、Hibernate、Fast Startup 可用，S1/S2/S3 和 Hybrid Sleep 不可用。这是当时系统的运行输出，比仅靠 FADT 位更直接，但仍需重新读取当前 Windows 状态。
+- DSDT 的 `_PTS` / `_WAK`（99478、99486 行）只执行调试输出及 LED 字段修改；该方法体没有充电寄存器访问或移交。未以此排除其他固件机制。
+- `PEP0.LPMD` 返回 `LPCD`；其中 EMEC 的 component 0 具有 PSTATE 0/1，分别对 `/arc/client/rail_cx` 给出 `0x100` / `0` 的 NPA 资源投票。包内没有充电管理参数。这与 EmuEC 中 PoFx 性能状态调用相符，不能把电源轨投票等同于充电接管。
+- EMEC 的 `EMOP(0x9c)` / `BMOP(0x9e)` 属于厂商自定义 OperationRegion。其存在不是物理独立 EC 的证明；电池状态经 PM3P/EMEC 传递也不等于固件持续控制充电。
+
+因此优先验证的解释是：**原 Windows 使用 S0 待机，EmuEC 可能在其间保持 D0 并定期维护充电**。这是由已知电源模型和定时路径提出的假设，尚无该机待机中的执行轨迹支持。S0 待机允许受控的短时软件活动，不能套用“合盖后所有内核任务都停止”的前提。[微软 Modern Standby 模型](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/modern-standby)
+
+补充支持线索：已识别的 170 处 WDF 函数表加载中没有 `WdfDeviceAssignS0IdleSettings`，充电 timer 的 TolerableDelay 为 1,000 ms，也不是 `TolerableDelayUnlimited`。微软将后者用于永不因该定时器唤醒处理器的配置。这些静态特征支持进一步追踪待机中的 timer 活动，但不构成所有间接路径或其他驱动行为的穷举证明。[WDF 空闲降电要求](https://learn.microsoft.com/en-us/windows-hardware/drivers/wdf/supporting-idle-power-down) · [No-Wake Timers](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/no-wake-timers)
+
+证据摘录：`output/hardware-boundary/acpi-power-boundary.json`、`acpi-power-excerpts.txt`、`windows-archived-sleep-states.txt`。
+
+### Linux 定时唤醒路径：RTC 硬件存在，维护后回睡仍需适配
+
+2026-11-09 13:46–13:56 UTC，对同一启动 `a20d1a8c-9281-4dc5-b0a6-00d344467797` 完成只读检查：
+
+- `/sys/power/mem_sleep` 仅有 `[s2idle]`，`/sys/class/rtc` 为空。PMIC RTC 平台设备已经创建，兼容串为 `qcom,pm8941-rtc`，但没有绑定驱动；`CONFIG_RTC_DRV_PM8XXX=m`，目标机没有对应模块文件。
+- 活动节点 `/soc@0/spmi@c440000/pmic@0/rtc@6000` 没有被禁用，IRQ 描述为 `<0 0x61 1 0>`。它来自 `sc8180x-pmics.dtsi`；父 PMIC 的 DT 兼容串是 `qcom,pm8150`，不据此单独推断芯片实物型号。
+- `CLOCK_REALTIME_ALARM`、`CLOCK_BOOTTIME_ALARM` 的只读 `clock_gettime` 调用均返回 `EINVAL`。`CONFIG_CHARGER_MANAGER`、`CONFIG_PM_AUTOSLEEP`、`CONFIG_PM_WAKELOCKS` 均未启用。
+
+为区分“设备树有节点”和“硬件真实可访问”，新增一次性只读模块 [`np545_rtc_diag.c`](../src/debian-battery/np545_rtc_diag.c)。它限定本机兼容串、上述节点、SID 0、已绑定的 `pmic-spmi` 父设备，以及尚未绑定正式 RTC 驱动的状态；只通过现有 regmap 读取上游 RTC 驱动也读取的地址。计数读取沿用上游的低字节进位检查。它不注册 RTC、不申请中断、不写寄存器、不改变系统时间，也没有常驻任务。
+
+| 13:55:19 UTC 真机读数 | 结果 | 已证明的范围 |
+| --- | --- | --- |
+| RTC 控制 `0x6046` | `0x80` | RTC enable 位已设置 |
+| RTC 计数 `0x6048–0x604b` | 16,410,951 → 16,410,952，间隔 1,121 ms | 通过现有 SPMI/regmap 可读，计数正在推进 |
+| 闹钟控制 `0x6146` / 目标 `0x6140–0x6143` | `0x00` / `0` | 此刻未启用闹钟；没有设置或触发过闹钟 |
+
+模块以匹配的 Linux 7.0 构建树执行 `ARCH=arm64 W=1` 编译，无警告；未解析的 regmap 符号仅有 `regmap_read` / `regmap_bulk_read`。KO SHA256 为 `0d2ea58ffeaafc9974ee71de5cb5ebde0861e6e551a2f457f4d7e53a86488188`，vermagic 为 `7.0.0 SMP preempt mod_unload aarch64`。真机加载成功，随后已卸载；RTC class 仍为空，充电服务仍保留原先的 failed 状态。未进行睡眠、重启或充电参数修改。
+
+正式 RTC 驱动不能只考虑“补一个模块”：当前 DT 没有 `allow-set-time`、NVMEM offset 或 `qcom,uefi-rtc-info`。上游 `rtc-pm8xxx` 在这种配置下以零 offset 解释计数；读到的约 1,641 万秒不是当前 Unix 时间。当前内核 `CONFIG_RTC_HCTOSYS_DEVICE="rtc0"`，RTC 核心在该设备注册时会执行 `do_settimeofday64`。因此**若按当前配置直接注册为 rtc0，会把原始计数当成日期设置系统时间**；正式验证前须先处理时间基准，或在隔离测试配置中避免自动设置系统时钟。本轮只读模块绕开了 RTC 注册路径。[RTC 核心](https://github.com/torvalds/linux/blob/v7.0/drivers/rtc/class.c) · [PM8xxx 驱动](https://github.com/torvalds/linux/blob/v7.0/drivers/rtc/rtc-pm8xxx.c)
+
+上游驱动已有 RTC alarm 和 wake IRQ 支持，SPMI IRQ 的 `set_wake` 会传递到父中断；可优先复用这条路径。但**计数可读不证明有闹钟写权限、IRQ 能到达 Linux，或能从 s2idle 唤醒**。EFI RTC 也不能作为现成替代：当前没有成功绑定，且该版本 `rtc-efi.c` 明确清除 `RTC_FEATURE_ALARM`。`alarmtimer` 只选择同时具备 alarm 和 wakeup 能力的 RTC；仅创建内核定时器不能填补这一缺口。[alarmtimer 实现](https://github.com/torvalds/linux/blob/v7.0/kernel/time/alarmtimer.c)
+
+另一个边界是“唤醒后自动回睡”。[Charger Manager 文档](https://www.kernel.org/doc/html/latest/power/charger-manager.html) 仍描述 `cm_suspend_again` / `charger_global_desc`；本轮核对的 v7.0 `.c` 和 `.h` 已没有这些接口。当前实现用 `ALARM_BOOTTIME` 安排唤醒，在 PM complete 阶段检查电池，缺 RTC 且充电时会拒绝 suspend；它没有提供文档所述的旧回睡函数。其充电控制还依赖 regulator 接口，不能直接接管现有 SBS + BQ25710 服务。[当前 Charger Manager 源码](https://github.com/torvalds/linux/blob/v7.0/drivers/power/supply/charger-manager.c)
+
+`kernel/power/suspend.c::platform_suspend_again()` 明确排除 `PM_SUSPEND_TO_IDLE`。而 `s2idle_loop()` 执行时设备已完成 noirq suspend；GENI I²C 的 `suspend_noirq` 会将 adapter 标记为 suspended，并按状态关闭中断、时钟和 interconnect。因此不能直接在 s2idle 回调里照常访问电池/充电器。**定时唤醒、恢复总线并执行策略、区分用户唤醒并决定是否回睡，是三个需要分别验收的环节。** 全内核协调的要求保留，当前尚没有可以直接启用就完成这三步的实现。[s2idle 控制流](https://github.com/torvalds/linux/blob/v7.0/kernel/power/suspend.c) · [GENI I²C 电源回调](https://github.com/torvalds/linux/blob/v7.0/drivers/i2c/busses/i2c-qcom-geni.c)
+
+下一步硬件验证顺序：先在清醒状态确认 RTC 时间处理及单次 alarm IRQ，再做受控 s2idle 唤醒；之后验证恢复后的 IC10/IC20 访问和充电目标刷新，最后才加入维护后回睡、开盖/按键退出及连续周期功耗检查。各步均不能以“模块编译成功”代替真机结果。
+
+原始证据在 `output/hardware-boundary/live-rtc-readonly.txt`、`live-linux-wake-inventory.json`。源码副本及哈希在 `linux-power-sources/`、`linux-power-source-sha256.json`；其中 `charger-manager.c` 和 `kernel/power/suspend.c` 与直接下载的上游 v7.0 文件逐字节一致，对照记录在 `linux-power-upstream-comparison.json`。
+
+### 真机电池身份与广播模式
+
+SBS 标准允许电池作为 SMBus 主设备，周期性向充电器发送 `ChargingCurrent(0x14)` / `ChargingVoltage(0x15)`。`BatteryMode(0x03)` 的 bit 14 为 1 时禁止这些广播；bit 13 独立控制告警广播。bit 0 / bit 8 表示可选的包内充电控制器能力及使能，与一般电池保护不是同一个概念。[SBS 1.1，第 5.1.4、5.2、5.4 节](https://sbs-forum.org/specs/sbdat110.pdf)
+
+2026-11-09 13:13:54 UTC，在启动 `a20d1a8c-9281-4dc5-b0a6-00d344467797` 中读取：
+
+| SBS 字段 | 实测值 | 含义与边界 |
+| --- | --- | --- |
+| ManufacturerName / DeviceName / DeviceChemistry | `SDI` / `4432D53` / `LION` | 当前实物身份，不再依靠 FCC 照片或候选型号猜测 |
+| BatteryMode `0x03` | `0x6000`，两次读数相同 | bit 14=1 禁止 I/V 广播；bit 13=1 禁止告警广播；bit 0=0 未声明可选内部充电控制器；不能据此判断没有保护 FET |
+| SpecificationInfo / DesignVoltage | `0x0031` / 7,720 mV | 与现有 SBS 读取结果一致 |
+| ChargingCurrent / ChargingVoltage | 6,916 mA / 8,860 mV | 电池请求值，不是批准的板级目标；不得直接代替现有电流、电压限制 |
+| 温度 / BatteryStatus | 28.9°C / `0x00c0` | 该采样时已初始化、正在放电 |
+
+两次模式采样间隔约 64.7 秒。SBS 对 ALARM_MODE 有 45–65 秒自动清除约定；两次读数不足以证明期间从未变化，亦未查明是谁设置该位，不能据此推断固件符合性或控制器存在与否。
+
+本机电池与 BQ25710 位于同一 IC20，但**当前配置没有启用电池 I/V 广播**。BQ25710 的公开命令表未列出 SBS 的 `AlarmWarning(0x16)`，不能默认它实现完整 Smart Battery Charger 告警机制。此前主机未刷新时电流归零的实测，也未显示有其他控制者在持续有效刷新。直接开启广播可能绕过现有 1,024 mA 和较低电压策略，本轮没有修改 BatteryMode。
+
+[三星 FCC 内部照片](https://fccid.io/m/d304a060e9280057b3c38009f4d3a005e3a703a308e13ba47123c5045a97ace7.pdf) 的送检样机电池标签可辨认为 AA-PBAN2HE、标称 7.72 V。照片不能识别包内保护芯片，也不能替代对当前真机电池型号的读取。
+
+### 同款电池的社区实现
+
+ChromiumOS EC 在固定提交 `08f5a1e6fc2c9467230444ac9b582dcf4d9f0068` 的 [`board/sasuke/battery.c`](https://chromium.googlesource.com/chromiumos/platform/ec/+/08f5a1e6fc2c9467230444ac9b582dcf4d9f0068/board/sasuke/battery.c) 中明确匹配 `SDI / 4432D53`。`sasuke` 对应 Samsung Galaxy Chromebook Go，可在 [ChromiumOS 设备表](https://new.chromium.org/chromium-os/developer-library/reference/development/developer-information-for-chrome-os-devices/) 核对。
+
+该配置给出最大 8,760 mV、标称 7,720 mV、预充 200 mA，并通过 profile override 将请求电压减去 100 mV、将超过 4 A 的请求电流降低 10%。这些数值可与原厂驱动交叉核对，不能直接移植为 NP545XLA 参数。
+
+更重要的是职责分工：该板有 NPCX EC，使用 RAA489000；[`ec.tasklist`](https://chromium.googlesource.com/chromiumos/platform/ec/+/08f5a1e6fc2c9467230444ac9b582dcf4d9f0068/board/sasuke/ec.tasklist) 明确启用 CHARGER 任务。[`charger_task`](https://chromium.googlesource.com/chromiumos/platform/ec/+/08f5a1e6fc2c9467230444ac9b582dcf4d9f0068/common/charge_state_v2.c) 读取电池、执行温度策略、设置电流/电压，并持续循环；插电时维持充电轮询。板级秒钩子还针对“满电且 AP 睡眠”降低 PD 输入电压。即主处理器睡眠时，EC 软件仍有工作要做。本机尚未确认等价的独立常驻控制者。
+
+复用时还需注意该历史源码的两个细节：
+
+- 电池表顶部关于温度字段不生效的注释与该提交的代码不一致。`board.h` 开启 `CONFIG_BATTERY_CHECK_CHARGE_TEMP_LIMITS`，实际函数按请求是否同时为零选择 start/charging 范围；应追踪执行路径，不能只抄注释或温度表。
+- FET 配置给出 `cfet_mask=0xc000`、`cfet_off_val=0x2000`，与掩码及相邻位定义存在明显不一致。它是进一步查询包内状态的线索，不能当作本机已验证的保护解码器。本轮未发送 ManufacturerAccess 或 ship-mode 命令。
+
+### 新发现：满充后服务退出，尚无自动再充闭环
+
+本轮读取已有日志，发现同次启动中的充电服务早于诊断操作停止：
+
+1. 启动约 1,377 秒时，目标电流 1,024 mA，实际 +262 mA，电池 8.675 V、29.1°C、97%，状态 `0x0080`。
+2. 约 1,379 秒时，服务把充电电流写为零并读回确认，随后关闭 Consumer Switch。
+3. 退出原因是 `pack status 0x40a0`，包含 `TERMINATE_CHARGE_ALARM`、`INITIALIZED`、`FULLY_CHARGED`。
+
+这证明电池会发出明确的满充/终止信号，当前主机策略也确实执行停充。它没有证明电池保护 FET 自行切断，更不等于已验收完整满充/再充周期。`keepcharge.py::pack_target` 将该状态作为 `StopCharge`，服务退出后处于 failed；`charge_startup.py` 的启动满电等待没有覆盖运行中充满再回到等待的转换。该行为是日用整合前的明确缺口，不应把“能持续充电”和“整套充电管理完成”等同。
+
+原始日志：`output/hardware-boundary/live-mode-repeat-and-charge-history.txt`。本轮保留现场，未重启充电服务。
+
+### 只读诊断实现与验证
+
+新增 `src/debian-battery/np545_battery_diag.c`，只在 `samsung,np545xla` 上找到指定 OF 节点、地址 `0x0b`、所有者 `np545-battery-ro` 后读取允许列表。它不注册新 I2C 驱动、不解绑现有驱动、不改变 client flags、不写寄存器。模块加载时采样一次，不创建后台任务；字符串由 `strings=1` 显式开启，使用标准 SBS 读取方式并检查长度。
+
+已在现有 Linux 7.0 构建树中以 `ARCH=arm64 W=1` 编译通过，无警告。未解析符号中的 I2C 调用均为读取接口。模块 SHA256 为 `b2bb2f3234cae29c34bc117c0658e59a10b498a377bf2f1dae78bd96e76d146f`，vermagic 为 `7.0.0 SMP preempt mod_unload aarch64`。真机两次加载/卸载均完成，读数在 `live-battery-identity.txt` 与上述重复采样日志中。模块未加入启动配置或正式软件包。
+
+独立外部模块构建方式：在临时目录复制该 C 文件，Kbuild 内容为 `obj-m := np545_battery_diag.o`，使用与目标内核严格匹配的构建目录执行 `make -C <kernel-build> M=<diagnostic-dir> ARCH=arm64 W=1 modules`。不能仅凭版本号相同就混用内核 ABI。
+
+### 剩余核查顺序
+
+1. **原厂真实睡眠行为**：补 Windows 运行时电源状态、定时活动和睡眠/恢复前后充电寄存器证据，区分屏幕关闭、Modern Standby、休眠和关机；继续核查 ACPI/固件路径。现有静态证据已定位普通 D0 回调，但还没有证明睡眠交接。
+2. **独立保护与告警链**：查明 SDI 4432D53 包内控制器、保护条件及告警接收者。没有可信寄存器定义前不写 ManufacturerAccess，不以升温、过充或清除保护标志验证。
+3. **补全主机策略边界**：把运行中充满、等待、再充、温度恢复、通信失败和 PD 断连列为后续状态机验收项；保持当前保守电压、电流。
+4. **再定睡眠充电实现**：若证明外部控制者能完整负责，再研究睡眠期间委托；否则由内核承担温度/状态检查、停充/再充和看门狗刷新，另行验证可唤醒时钟及自动返回睡眠。`power_supply` 提供标准接口，不自动填补这些策略。当前已只读确认 PMIC RTC 走时，尚未验证 alarm IRQ、s2idle 唤醒和自动回睡；还需处理 RTC 时间基准和 GENI I²C 恢复顺序。
+
+调查中临时加载并卸载了 SBS 和 RTC 的只读诊断模块，没有修改真机充电参数、电池模式、服务或启动项，没有重启。睡眠持续充电、完整满充/再充周期和电池独立异常保护仍未完成真机验收。
+
+### 已准备的 Windows 验证入口
+
+[`dump/NP545XLA-PowerBaseline.ps1`](dump/NP545XLA-PowerBaseline.ps1) 只采集当前电池遥测、系统/相关驱动信息、睡眠能力、电源设置，以及 After 阶段的系统电源事件和 powercfg 报告。脚本不切换系统、不触发睡眠、不改设置、不访问原始 I²C，也不进行网络上传。报告写入 `%LOCALAPPDATA%\NP545-Power\<timestamp>`。
+
+首轮仅验证**原端口插电的 S0 待机**。应由操作者安排切换 Windows，以免中断其他 Linux 工作；电池有充电空间、确认正在充电时，在管理员 PowerShell 执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\NP545XLA-PowerBaseline.ps1 -Phase Before
+```
+
+记录打印的 Reports 目录，保持同一充电器、端口及外设组合，手动从开始菜单选择“睡眠”，约 20 分钟后唤醒，立即执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\NP545XLA-PowerBaseline.ps1 -Phase After -TrialDirectory '<Reports 目录>'
+```
+
+判断必须同时查看：
+
+1. 当前 `/a` 是否仍支持 S0 Low Power Idle；驱动版本是否与反汇编样本一致。
+2. 睡眠报告是否记录目标时间段，Screen Off 与 Sleep/低功耗驻留是否成立；出现非零驻留并不等于整段持续深睡。
+3. `before/battery-last.json` 与 `after/battery-first.json` 的容量、电压、充放电状态，以及期间是否重启、是否改变电源来源。Windows WMI 是驱动遥测，可能缓存，不能当作直接 SBS 寄存器读取。
+4. **AC 会话的 SleepStudy 不记录能量变化**，因此不能用其中的 Charge 标记证明实际充电；需结合前后容量读数。即使容量增长，也只支持该测试区间的净充电，无法单独区分待机维护与唤醒附近的充电，更不能证明执行者身份。若需定位 EmuEC 活动，下一阶段再进行针对性 ETW/总线观测。[SleepStudy 限制](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/modern-standby-sleepstudy) · [powercfg 命令](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/powercfg-command-line-options)
+
+脚本已用官方 PowerShell 7.4.6 便携版完成语法解析和输出记录格式检查；Windows CIM/PnP/powercfg 尚未执行验收。验证记录在 `output/hardware-boundary/power-collector-validation.txt`。`complete.json` 只表示一次采集结束，须检查其中 Errors，不能当作验收通过标记。
