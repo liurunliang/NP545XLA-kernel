@@ -266,3 +266,7 @@ Windows 可正常通信和扫描，没有使本轮 Linux 低速握手恢复。�
 首版模块摘要 `4f3db155560efea2a722a97534c8d8bdc4578315e752ad2a6c28fee1da2f431a`；带返回值版 `f0c83fadf8dc2185d8a1b26bb7e58a2a24ac3e911dcc38699f6884869ea610e7`。两次构建都核验原源码、Image、配置、符号表和原模块不变。源码、构建、原始采样及分析保存在忽略目录 `output/bluetooth/rts-wake/`。
 
 结束时撤销本轮 73 覆盖，恢复原 72 低速诊断配置；UART 仍绑定内置驱动，`driver_override` 为空。EFI 摘要仍为 `d86e7ec81e18cebd1feba385cd5494d790f2bb1540330f1c39c0f9773cd96fea`，八个单次标记均为 0。随后实际进入默认 Latest，启动 ID `05e6607c-82c9-4ab8-8758-fe53561fae24`，命令行没有蓝牙标记、hci_uart 未加载、测试服务 inactive，LightDM 和 GPIO101 续充服务 active。测试项和默认项分别经 `wlp1s0` 下载 138612 字节，摘要均为 `ed56aac47e7911e65ee63aae8d67e29f20e023f840e49f8ed037043a33de138a`。
+
+## 固件与原厂初始化分析（2026-11-09）
+
+[详细对照](debian-bluetooth-reverse.md)记录了 Windows / Linux 实际 UART 资源与绑定、原厂 / Debian TLV 和 NVM、有限范围反汇编，以及原厂首条查询前 200 ms 等待的真机 A/B/A。地址与绑定吻合；额外等待仍收到异常五字节并超时，未恢复有效芯片版本。独立诊断参数 `qca_initial_settle` 默认关闭，测试后已移除本轮服务覆盖并验证返回 Latest。

@@ -12,9 +12,12 @@ normal flow control before the query. This is an unconditional timing
 experiment inside the initial-version probe, not
 proof that the OEM CTS-conditional wake branch executes on this machine.
 
+qca_initial_settle adds a fixed 200 ms pre-query wait, independent of RTS.
+It remains an opt-in timing comparison, not a validated initialization fix.
+
 --- a/drivers/bluetooth/hci_qca.c
 +++ b/drivers/bluetooth/hci_qca.c
-@@ -47,6 +47,17 @@
+@@ -47,6 +47,23 @@
  module_param(qca_startup_trace, bool, 0444);
  MODULE_PARM_DESC(qca_startup_trace,
  		"Log at most 64 QCA6390 UART chunks before version discovery");
@@ -29,15 +32,26 @@ proof that the OEM CTS-conditional wake branch executes on this machine.
 +module_param(qca_initial_rts_wake, bool, 0444);
 +MODULE_PARM_DESC(qca_initial_rts_wake,
 +		"Initial-version probe only: pulse RTS before querying NP545XLA QCA6390");
++
++/* Fixed, opt-in timing comparison with the OEM pre-query delay. */
++static bool qca_initial_settle;
++module_param(qca_initial_settle, bool, 0444);
++MODULE_PARM_DESC(qca_initial_settle,
++		"Initial-version probe only: wait 200 ms before querying NP545XLA QCA6390");
  
  /* HCI_IBS protocol messages */
  #define HCI_IBS_SLEEP_IND	0xFE
-@@ -2030,6 +2041,40 @@
+@@ -2030,6 +2047,45 @@
  		qca_set_speed(hu, QCA_INIT_SPEED);
  	}
  
 +	if (qca_initial_version_only && soc_type == QCA_QCA6390 &&
 +	    of_machine_is_compatible("samsung,np545xla")) {
++		if (qca_initial_settle) {
++			bt_dev_info(hdev, "QCA_INITIAL_SETTLE begin ms=200");
++			msleep(200);
++			bt_dev_info(hdev, "QCA_INITIAL_SETTLE end");
++		}
 +		/* Timing experiment: the OEM wake branch is CTS-conditional. */
 +		if (qca_initial_rts_wake) {
 +			int rts_ret;
