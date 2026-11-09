@@ -65,13 +65,13 @@ install -Dm644 "$here/debian-battery/np545-pd-hotplug.service" "$hotplug/usr/lib
 mkdir -p "$hotplug/DEBIAN"
 cat > "$hotplug/DEBIAN/control" <<CONTROL
 Package: np545xla-pd-hotplug
-Version: $release-4
+Version: $release-5
 Architecture: arm64
 Maintainer: NP545XLA Linux contributors <root@localhost>
 Depends: np545xla-charge-keepalive (= $release-2)
 Description: Samsung IC10 USB-C sink reconnect trial
 CONTROL
-dpkg-deb --root-owner-group --build "$hotplug" "$out/np545xla-pd-hotplug_${release}-4_arm64.deb"
+dpkg-deb --root-owner-group --build "$hotplug" "$out/np545xla-pd-hotplug_${release}-5_arm64.deb"
 
 trace=$stage/trace
 install -Dm755 "$here/debian-battery/ic10_irq.py" "$trace/$powerlib/ic10_irq.py"
@@ -79,13 +79,13 @@ install -Dm644 "$here/debian-battery/np545-ic10-irq.service" "$trace/usr/lib/sys
 mkdir -p "$trace/DEBIAN"
 cat > "$trace/DEBIAN/control" <<CONTROL
 Package: np545xla-ic10-irq
-Version: $release-4
+Version: $release-5
 Architecture: arm64
 Maintainer: NP545XLA Linux contributors <root@localhost>
-Depends: np545xla-pd-hotplug (= $release-4), python3-libgpiod (>= 2)
+Depends: np545xla-pd-hotplug (= $release-5), python3-libgpiod (>= 2)
 Description: Read-only IC10 GPIO edge and PD state trace for the Samsung trial
 CONTROL
-dpkg-deb --root-owner-group --build "$trace" "$out/np545xla-ic10-irq_${release}-4_arm64.deb"
+dpkg-deb --root-owner-group --build "$trace" "$out/np545xla-ic10-irq_${release}-5_arm64.deb"
 
 ack=$stage/ack
 install -Dm755 "$here/debian-battery/irq_ack.py" "$ack/$powerlib/irq_ack.py"
@@ -93,24 +93,25 @@ install -Dm644 "$here/debian-battery/np545-irq-ack.service" "$ack/usr/lib/system
 mkdir -p "$ack/DEBIAN"
 cat > "$ack/DEBIAN/control" <<CONTROL
 Package: np545xla-irq-ack
-Version: $release-3
+Version: $release-4
 Architecture: arm64
 Maintainer: NP545XLA Linux contributors <root@localhost>
-Depends: np545xla-ic10-irq (= $release-4)
+Depends: np545xla-ic10-irq (= $release-5)
 Description: Dedicated IC10 S2MM005 interrupt acknowledgment trial
 CONTROL
-dpkg-deb --root-owner-group --build "$ack" "$out/np545xla-irq-ack_${release}-3_arm64.deb"
+dpkg-deb --root-owner-group --build "$ack" "$out/np545xla-irq-ack_${release}-4_arm64.deb"
 
 gpio=$stage/gpio
 install -Dm755 "$here/debian-battery/gpio_charge.py" "$gpio/$powerlib/gpio_charge.py"
+install -Dm644 "$here/debian-battery/charge_startup.py" "$gpio/$powerlib/charge_startup.py"
 install -Dm644 "$here/debian-battery/np545-gpiocharge.service" "$gpio/usr/lib/systemd/system/np545-gpiocharge.service"
 mkdir -p "$gpio/DEBIAN"
 cat > "$gpio/DEBIAN/control" <<CONTROL
 Package: np545xla-gpiocharge
-Version: $release-1
+Version: $release-2
 Architecture: arm64
 Maintainer: NP545XLA Linux contributors <root@localhost>
-Depends: np545xla-irq-ack (= $release-3)
+Depends: np545xla-irq-ack (= $release-4)
 Description: Interrupt-driven IC10 hotplug and battery charging trial
 CONTROL
-dpkg-deb --root-owner-group --build "$gpio" "$out/np545xla-gpiocharge_${release}-1_arm64.deb"
+dpkg-deb --root-owner-group --build "$gpio" "$out/np545xla-gpiocharge_${release}-2_arm64.deb"

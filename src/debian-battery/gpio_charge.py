@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Drive IC10 hotplug recovery from GPIO101; sleep indefinitely while idle."""
+import argparse
 from collections import deque
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ import ic10_irq as trace
 from hotplug import (FIRMWARE_MA, InputCharger, Sink, StopCharge, boot_profile, charge_after_replug,
                      check_boot_input, log, pack, poll_port, profile, stopping, uptime, wait_for)
 from irq_ack import AckPort, PIN, acknowledge, claim_gpio
-from np545_charge_observe import DT
+from np545_charge_observe import BATTERY, DT
 
 
 @dataclass(frozen=True)
@@ -129,12 +130,13 @@ def stop(*unused):
     stopping.set()
 
 
-def run():
+def run(*, startup=False):
     args = set(Path("/proc/cmdline").read_text().split())
     if (not {"np545.gpiocharge=1", "np545.battery=1"} <= args
             or args & {"np545.hotplug=1", "np545.irqack=1", "np545.ic10irq=1", "np545.keepcharge=1"}
             or b"samsung,np545xla" not in (DT / "compatible").read_bytes().split(b"\0")):
         raise StopCharge("select the dedicated GPIO101 hotplug entry")
+    startup = startup or "np545.chargestartup=1" in args
     with ExitStack() as stack:
         # SIGTERM must wake the same blocking wait as a GPIO edge, including
         # in the gap between testing the stop flag and entering select().
@@ -147,11 +149,15 @@ def run():
             previous = signal.signal(sig, stop)
             stack.callback(signal.signal, sig, previous)
         line = claim_gpio(stack, "np545-gpiocharge")
-        known = boot_profile()
+        if startup:
+            wait_for("SBS gauge", lambda: (BATTERY / "device/sbs_status").exists(), 60)
+        else:
+            known = boot_profile()
         sink = stack.enter_context(Sink())
         chip = stack.enter_context(InputCharger())
         pd_irq = stack.enter_context(AckPort())
-        check_boot_input(sink, chip, known)
+        if not startup:
+            check_boot_input(sink, chip, known)
         events = Interrupts(line, pd_irq, rd)
         initial = line.get_value(PIN).value
         trace.log("armed", boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
@@ -159,15 +165,22 @@ def run():
         if not initial and not line.wait_edge_events(timeout=0):
             events.pending = events.snapshot()
         try:
-            recover(events, sink, chip, known)
+            if startup:
+                from charge_startup import recover_startup
+                recover_startup(events, sink, chip)
+            else:
+                recover(events, sink, chip, known)
         finally:
             trace.log("closing", seq=events.seq, level=line.get_value(PIN).value, irqs=trace.counts())
     trace.log("released", line=trace.lines()[PIN], irqs=trace.counts())
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--startup", action="store_true", help="opt into the IC10 startup candidate")
+    options = parser.parse_args()
     try:
-        run()
+        run(startup=options.startup)
     except (StopCharge, RuntimeError, OSError, ValueError) as exc:
         log("exit", reason=str(exc))
         sys.exit(0 if stopping.is_set() else 1)
