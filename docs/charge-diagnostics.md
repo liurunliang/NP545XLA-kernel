@@ -258,7 +258,7 @@ ChromiumOS EC 在固定提交 `08f5a1e6fc2c9467230444ac9b582dcf4d9f0068` 的 [`b
 
 ### 已准备的 Windows 验证入口
 
-[`dump/NP545XLA-PowerBaseline.ps1`](dump/NP545XLA-PowerBaseline.ps1) 只采集当前电池遥测、系统/相关驱动信息、睡眠能力、电源设置，以及 After 阶段的系统电源事件和 powercfg 报告。脚本不切换系统、不触发睡眠、不改设置、不访问原始 I²C，也不进行网络上传。报告写入 `%LOCALAPPDATA%\NP545-Power\<timestamp>`。
+[`dump/NP545XLA-PowerBaseline.ps1`](dump/NP545XLA-PowerBaseline.ps1) 只采集当前电池遥测、系统/相关驱动信息、睡眠能力、电源设置，以及 After 阶段的系统电源事件和 powercfg 报告。还会保存 EmuEC 服务状态、映像路径、磁盘文件 SHA256，以及 WPR/Tracelog/Tracefmt 的命令查找结果。脚本不切换系统、不触发睡眠、不启用追踪、不改设置、不访问原始 I²C，也不进行网络上传。报告写入 `%LOCALAPPDATA%\NP545-Power\<timestamp>`。磁盘文件哈希不等于已加载内存映像的校验；工具未出现在命令查找结果中也不等于未安装。
 
 首轮仅验证**原端口插电的 S0 待机**。应由操作者安排切换 Windows，以免中断其他 Linux 工作；电池有充电空间、确认正在充电时，在管理员 PowerShell 执行：
 
@@ -279,4 +279,63 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\NP545XLA-PowerBaseline
 3. `before/battery-last.json` 与 `after/battery-first.json` 的容量、电压、充放电状态，以及期间是否重启、是否改变电源来源。Windows WMI 是驱动遥测，可能缓存，不能当作直接 SBS 寄存器读取。
 4. **AC 会话的 SleepStudy 不记录能量变化**，因此不能用其中的 Charge 标记证明实际充电；需结合前后容量读数。即使容量增长，也只支持该测试区间的净充电，无法单独区分待机维护与唤醒附近的充电，更不能证明执行者身份。若需定位 EmuEC 活动，下一阶段再进行针对性 ETW/总线观测。[SleepStudy 限制](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/modern-standby-sleepstudy) · [powercfg 命令](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/powercfg-command-line-options)
 
-脚本已用官方 PowerShell 7.4.6 便携版完成语法解析和输出记录格式检查；Windows CIM/PnP/powercfg 尚未执行验收。验证记录在 `output/hardware-boundary/power-collector-validation.txt`。`complete.json` 只表示一次采集结束，须检查其中 Errors，不能当作验收通过标记。
+脚本已用官方 PowerShell 7.4.6 便携版完成语法解析；新增映像路径处理检查了 5 种正常形式和 3 种拒绝形式，文档中的 5 段 PowerShell 命令也已通过解析。此前已检查输出记录格式；Windows CIM/PnP/powercfg 和追踪工具尚未执行验收。验证记录在 `output/hardware-boundary/power-collector-validation.txt`。`complete.json` 只表示一次采集结束，须检查其中 Errors，不能当作验收通过标记。
+
+### 原厂 WPP 入口与后续运行时取证
+
+上述 EmuEC 样本包含可定向启用的 WPP 日志。以下参数来自 ARM64 反汇编，**尚未在 Windows 查询、启用或解析实际事件**：
+
+| 项目 | 值与静态依据 |
+| --- | --- |
+| 启用用的 control GUID | `28f88fb3-c7ec-4a0c-bf04-aaaa2e4dc7e0`，位于 `0x2b400`；初始化入口 `0x52010` 将其放入控制块，`0x4f7f4` 调用动态解析的 `EtwRegisterClassicProvider` 注册 |
+| 通用充电日志标志 | `0x21590` 将正文格式化后，以 flag index 10 调用 `0x210e8`；后者检查 `1 << (10 - 1)`，即 `0x200` |
+| 首轮候选 level | `5`；覆盖已核对的 level 2 日志，但不覆盖所有 OEM 调用。例如 `SetChargerMain` 末尾 `0x14d34` 传入 `0x40`，并另受 recorder 状态条件限制 |
+| 解码用的 message GUID / ID | `cb82acef-d6ce-3c92-28fd-52039420aa94` / `15`；GUID 位于 `0x2bc20`，不是启用 provider 所用的 GUID |
+| 正文 | `0x2120c` 经 `WmiTraceMessage` 传入两个以 NUL 结尾的 ANSI 字符串：`EmuEC` 和已由 `_vsnprintf` 格式化的正文；正文最多 511 字节 |
+
+定位记录保存在 `output/hardware-boundary/emuec-wpp-boundary.json`、`emuec-wpp-excerpts.txt` 和 `emuec-import-addresses.json`。由于正文已格式化，有望在缺少私有 PDB 时解码这一类消息，但必须用实际 ETL 验证。不能把 control GUID 当作 TMF 文件名，也不能因为通用工具暂时没有显示文本，就判断驱动没有执行。微软说明 TMF 按 message GUID 匹配，其内部格式可能随版本变化。[TMF 格式说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/trace-message-format-file)
+
+取证分三步，每步使用新目录：
+
+1. 先完成上节**不启用追踪**的 20 分钟待机基线，保留容量与驻留报告。
+2. 确认 `emuec-service.json` 的服务状态与磁盘哈希，再在**清醒、正在充电**时做约两分钟 WPP 小样本，核对启用状态、日志正文及丢失计数。哈希不匹配时重新分析实际映像；没有有效小样本前，不用“睡眠日志为空”推论硬件接管。
+3. 小样本可用后，另做 WPP 与 WPR Power 同时记录的待机实验，将充电维护事件与平台驻留、设备 D-state 对齐。追踪可能改变待机行为，因此与第一步比较。短实验用于识别执行机制；若评价功耗趋势，微软建议至少一小时的 Modern Standby 记录。[WPR Power 与 WPA 分析方法](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/using-windows-performance-analyzer-to-analyze-modern-standby-issues)
+
+管理员 PowerShell 中先检查现有会话。以下命令假设已找到可运行的 WDK Tracelog；若不在 PATH，应使用经过确认的完整路径：
+
+```powershell
+tracelog.exe -l -lp
+tracelog.exe -enumguidex '#28f88fb3-c7ec-4a0c-bf04-aaaa2e4dc7e0'
+wpr.exe -status
+wpr.exe -profiles
+```
+
+只有目标 provider 未被其他会话占用，才进行 WPP 小样本；联合实验还要求没有其他 WPR 录制。保留查询输出，不修改或停止已有会话。创建唯一名称与目录后，候选命令为：
+
+```powershell
+$session = 'NP545-EmuEC-' + [Guid]::NewGuid().ToString('N')
+$traceDir = Join-Path $env:LOCALAPPDATA ('NP545-Power\' + $session)
+New-Item -ItemType Directory -Path $traceDir -ErrorAction Stop | Out-Null
+$session | Set-Content -LiteralPath (Join-Path $traceDir 'session-name.txt')
+tracelog.exe -start $session -guid '#28f88fb3-c7ec-4a0c-bf04-aaaa2e4dc7e0' -flag 0x200 -level 5 -UsePerfCounter -seq 64 -f (Join-Path $traceDir 'emuec.etl')
+if ($LASTEXITCODE -ne 0) { throw 'Trace start failed; inspect existing sessions and retain the output.' }
+tracelog.exe -q $session -lp | Tee-Object -FilePath (Join-Path $traceDir 'session-start.txt')
+tracelog.exe -enumguidex '#28f88fb3-c7ec-4a0c-bf04-aaaa2e4dc7e0' | Tee-Object -FilePath (Join-Path $traceDir 'provider-enabled.txt')
+```
+
+保持清醒并充电约两分钟后，在同一窗口结束自己创建的会话：
+
+```powershell
+tracelog.exe -q $session -lp | Tee-Object -FilePath (Join-Path $traceDir 'session-end.txt')
+tracelog.exe -stop $session | Tee-Object -FilePath (Join-Path $traceDir 'session-stop.txt')
+```
+
+检查各命令退出结果、provider 的 flags/level、ETL 事件时间范围和 lost events/buffers。`-seq 64` 到达 64 MB 后停止记录，不覆盖开头；若触顶，本次记录不能覆盖完整实验。PowerShell 中 `#GUID` 必须带引号。Tracelog 可能忽略部分错误选项，不能只凭启动命令显示成功验收。[Tracelog 命令与查询说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/tracelog-command-syntax)
+
+联合实验另建一轮采集：WPP 启动确认后执行 `wpr.exe -start Power`，仅在成功后手动睡眠；唤醒后用 `wpr.exe -stop <本轮唯一目录>\power.etl` 保存，再停止本轮 WPP。不取消其他 WPR 录制，也不设置开机自动追踪。结合该轮 Before/After 采集，分析以下证据强度：
+
+- `RefreshCharger` 入口日志（`0x14f00`）只能证明主机执行到维护函数，不能证明本次已经写寄存器或写入成功。
+- `BatteryPolling::cmd ... wData ...` 日志（`0x12b58`）位于读取助手返回成功的分支，可用于识别本轮返回值与采样时间；仍不是外部总线分析仪证据，也不是每条日志都代表电流采样。
+- `SetChargerMain` 的目标值日志与实际充电电流不同；该函数末尾没有依据各次写入结果决定是否打印，且末尾日志不在 level 5 的范围内。
+- 待机区间持续出现有效电池读取或充电维护日志，将支持 Windows 主机仍参与管理；必须对齐 Sleep/平台驻留区间，排除只记录到入睡前和恢复后。
+- 未出现日志不能证明由硬件接管。还需排除筛选条件、丢失、解码失败、设备 D-state 和追踪改变待机驻留等因素；休眠、关机充电也不能由这轮 S0 实验外推。

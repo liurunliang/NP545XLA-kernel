@@ -78,6 +78,23 @@ function Save-Powercfg([string]$Name, [string[]]$Arguments) {
     }
 }
 
+function Resolve-EmuEcImagePath([string]$RawPath, [string]$WindowsDirectory) {
+    # Treat the service ImagePath as data, never as a command line to execute.
+    $imagePath = [Environment]::ExpandEnvironmentVariables($RawPath.Trim()).Trim('"')
+    if ($imagePath.StartsWith('\??\', [StringComparison]::Ordinal)) {
+        $imagePath = $imagePath.Substring(4)
+    }
+    if ($imagePath.StartsWith('\SystemRoot\', [StringComparison]::OrdinalIgnoreCase)) {
+        $imagePath = $WindowsDirectory.TrimEnd('\') + '\' + $imagePath.Substring(12)
+    } elseif ($imagePath.StartsWith('System32\', [StringComparison]::OrdinalIgnoreCase)) {
+        $imagePath = $WindowsDirectory.TrimEnd('\') + '\' + $imagePath
+    }
+    if ($imagePath -notmatch '^[A-Za-z]:\\[^:"*?<>|]+\\EmuEC\.sys$') {
+        throw ('Unrecognized EmuEC image path; retain the raw service record: ' + $RawPath)
+    }
+    return $imagePath
+}
+
 # Take the first sample before the slower inventory/report operations.
 Save-Battery 'battery-first'
 Save-Json 'system' {
@@ -114,6 +131,42 @@ Save-Json 'drivers' {
     Get-CimInstance Win32_PnPSignedDriver | Where-Object {
         $_.DeviceID -match '^ACPI\\(SAM060[46]|QCOM0263|QCOM0419|QCOM049A|PNP0C0A)\\'
     } | Select-Object DeviceID,DeviceName,DriverVersion,DriverDate,DriverProviderName,InfName,IsSigned
+}
+Save-Json 'emuec-service' {
+    $driver = Get-CimInstance Win32_SystemDriver -Filter "Name='EmuEC'"
+    if (-not $driver) { throw 'EmuEC system-driver service was not found.' }
+    $diskImage = $null
+    $imageError = $null
+    try {
+        $imagePath = Resolve-EmuEcImagePath $driver.PathName $env:SystemRoot
+        $file = Get-Item -LiteralPath $imagePath
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $imagePath).Hash
+        $analyzedHash = '70de2be234da9d34125b4409f1272f8e74b2a7f1f1c651f9f09548823cb58bb9'
+        $diskImage = [ordered]@{
+            Path=$file.FullName; Length=$file.Length; SHA256=$hash
+            FileVersion=$file.VersionInfo.FileVersion
+            MatchesAnalyzedBinary=($hash -eq $analyzedHash)
+            AnalyzedSHA256=$analyzedHash
+        }
+    } catch {
+        $imageError = $_.Exception.Message
+        $script:problems += [ordered]@{ Item='emuec-image'; Error=$imageError }
+    }
+    [ordered]@{
+        TimestampUtc=(Get-Date).ToUniversalTime().ToString('o')
+        Service=($driver | Select-Object Name,DisplayName,State,Started,StartMode,PathName)
+        ImageOnDisk=$diskImage; ImageReadError=$imageError
+        Note='Hashes the service image on disk, not loaded memory. A different hash requires renewed WPP analysis.'
+    }
+}
+Save-Json 'trace-tools' {
+    foreach ($toolName in @('wpr.exe', 'tracelog.exe', 'tracefmt.exe')) {
+        $commands = @(Get-Command -Name $toolName -CommandType Application -All -ErrorAction SilentlyContinue)
+        [ordered]@{
+            Name=$toolName; Paths=@($commands | ForEach-Object { $_.Source })
+            Note='Discovery only; no trace started. Empty means not found through command lookup, not necessarily uninstalled.'
+        }
+    }
 }
 
 if ($Phase -eq 'After') {
