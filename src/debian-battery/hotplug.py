@@ -188,18 +188,24 @@ def contract(voltage):
     return pd if pd.get("requested_mV") == voltage and pd.get("requested_mA") == 3000 else None
 
 
-def charge_after_replug(sink, chip, known, wait=None):
+def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0):
+    # The startup policy can also take over the measured firmware-started
+    # charge. All other callers still require a zero target after a replug.
+    if initial_current not in (0, FIRMWARE_MA):
+        raise StopCharge("unknown initial charge target")
     if wait is None:
         wait = stopping.wait
     switch_owned = False
     charge_owned = False
     try:
         sink.check(known, 12000)
-        pack_target(pack(), starting=True)
-        chip.settings(0)
+        pack_target(pack(), starting=initial_current == 0)
+        chip.settings(initial_current)
         present = chip.input_present()
         enabled = sink.switches()
         log("input-before", ac=present, consumer=enabled)
+        if initial_current and (not present or not enabled):
+            raise StopCharge("firmware charge has no verified input path")
         if not enabled:
             if present:
                 raise StopCharge("BQ already supplied through a different path")
@@ -208,8 +214,11 @@ def charge_after_replug(sink, chip, known, wait=None):
             switch_owned = True
             sink.consumer(True)
         wait_for("BQ adapter present", chip.input_present, 4)
-        chip.limit_input()
-        expected = 0
+        if initial_current:
+            chip.check_limits()
+        else:
+            chip.limit_input()
+        expected = initial_current
         last = None
         positive = False
         while not stopping.is_set():

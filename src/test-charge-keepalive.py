@@ -228,6 +228,75 @@ class HotplugTests(unittest.TestCase):
                         hp.charge_after_replug(sink, chip, hp.profile(self.twelve))
                     self.assertEqual(writes, [(0, 1024), (10, 0)])
 
+    def test_firmware_handoff_uses_same_refresh_and_cleanup(self):
+        sink, chip = Mock(), Mock()
+        sink.switches.return_value = 1
+        chip.input_present.return_value = True
+        stop = hp.stopping.__class__()
+        clock = [20]
+        regs = {0x14: 3776}
+        writes = []
+        battery = dict(flags=0x80, capacity=93, temp=301, voltage_now=8450000,
+                       constant_charge_voltage_max=8860000, constant_charge_current_max=4256000,
+                       current_now=900000)
+        def settings(expected):
+            self.assertEqual(regs[0x14], expected)
+        def write(current):
+            regs[0x14] = current
+            writes.append((clock[0], current))
+        def tick(seconds):
+            clock[0] += seconds
+            if clock[0] == 201:
+                stop.set()
+            return stop.is_set()
+        chip.settings.side_effect = settings
+        chip.set_current.side_effect = write
+        with ExitStack() as stack:
+            for name, value in dict(stopping=stop, pack=lambda: battery,
+                                    uptime=lambda: clock[0], log=Mock()).items():
+                stack.enter_context(patch.object(hp, name, value))
+            hp.charge_after_replug(sink, chip, hp.profile(self.twelve), wait=tick, initial_current=3776)
+        self.assertEqual(writes, [(20, 1024), (65, 1024), (110, 1024), (155, 1024),
+                                 (200, 1024), (201, 0)])
+        chip.limit_input.assert_not_called()
+        sink.consumer.assert_not_called()
+
+    def test_firmware_handoff_cannot_enable_an_unknown_input(self):
+        for present, enabled in ((False, 1), (True, 0), (False, 0)):
+            with self.subTest(present=present, enabled=enabled):
+                sink, chip = Mock(), Mock()
+                sink.switches.return_value = enabled
+                chip.input_present.return_value = present
+                battery = dict(flags=0x80, capacity=93, temp=301, voltage_now=8450000,
+                               constant_charge_voltage_max=8860000, constant_charge_current_max=4256000,
+                               current_now=900000)
+                with patch.object(hp, "pack", return_value=battery), patch.object(hp, "log"):
+                    with self.assertRaisesRegex(hp.StopCharge, "input path"):
+                        hp.charge_after_replug(sink, chip, hp.profile(self.twelve), initial_current=3776)
+                chip.set_current.assert_not_called()
+                sink.consumer.assert_not_called()
+
+    def test_unknown_handoff_current_is_rejected_before_hardware_access(self):
+        sink, chip = Mock(), Mock()
+        with self.assertRaisesRegex(hp.StopCharge, "unknown initial"):
+            hp.charge_after_replug(sink, chip, hp.profile(self.twelve), initial_current=2048)
+        self.assertEqual(sink.mock_calls, [])
+        self.assertEqual(chip.mock_calls, [])
+
+    def test_handoff_write_failure_still_attempts_zero_current(self):
+        sink, chip = Mock(), Mock()
+        sink.switches.return_value = 1
+        chip.input_present.return_value = True
+        battery = dict(flags=0x80, capacity=93, temp=301, voltage_now=8450000,
+                       constant_charge_voltage_max=8860000, constant_charge_current_max=4256000,
+                       current_now=900000)
+        chip.set_current.side_effect = [OSError("readback failed"), None]
+        with patch.object(hp, "pack", return_value=battery), patch.object(hp, "log"), patch.object(
+                hp, "uptime", return_value=20):
+            with self.assertRaisesRegex(OSError, "readback failed"):
+                hp.charge_after_replug(sink, chip, hp.profile(self.twelve), initial_current=3776)
+        self.assertEqual([c.args for c in chip.set_current.call_args_list], [(1024,), (0,)])
+
     def test_acknowledged_detach_only_after_current_connection(self):
         with TemporaryDirectory() as tmp:
             evidence = Path(tmp) / "last-detach"
