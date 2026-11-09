@@ -147,6 +147,15 @@ class InputCharger(Charger):
         if self.word(0x3f) != 0x3c00 or self.word(0x22) != 0x3c00:
             raise StopCharge("input limits do not match the verified 3 A profile")
 
+    def restore_firmware_voltage(self):
+        # BQ25710's 2S reset value is 8400 mV. Restore only this board's measured
+        # 8760 mV ceiling, while charging is stopped; callers must validate the
+        # live pack request and IC10 contract first. Never expose an arbitrary
+        # voltage setter or alter the watchdog/options.
+        self.settings(0, voltage=8400)
+        send(self, bytes([0x15, FIRMWARE_MV & 255, FIRMWARE_MV >> 8]))
+        self.settings(0)
+
 
 def wait_for(description, reader, seconds, delay=0.5):
     until = uptime() + seconds

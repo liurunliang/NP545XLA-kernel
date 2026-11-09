@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Opt-in IC10 startup policy for the original 12 V / 3 A source."""
-from hotplug import (FIRMWARE_MA, StopCharge, charge_after_replug, is_detached, log,
+from hotplug import (FIRMWARE_MA, FIRMWARE_MV, StopCharge, charge_after_replug, is_detached, log,
                      pack, pack_target, poll_port, profile, stopping, uptime, wait_for)
 
 
@@ -20,6 +20,25 @@ def discharging_pack():
 def check_role(pd):
     if pd and (int(pd["state_hex"], 16) & 0xe2000000 or pd.get("source")):
         raise StopCharge("IC10 role, short or reset changed")
+
+
+def initialize_voltage(sink, chip, known):
+    voltage = chip.word(0x15)
+    if voltage == FIRMWARE_MV:
+        return
+    sink.check(known, 12000)
+    battery = pack()
+    pack_target(battery, starting=True)
+    chip.settings(0, voltage=8400)
+    if (chip.word(0x3f), chip.word(0x22)) not in ((0x4100, 0x4100), (0x3c00, 0x3c00)):
+        raise StopCharge("unknown input limits before voltage initialization")
+    if chip.input_present() and not sink.switches():
+        raise StopCharge("BQ already supplied through a different path")
+    if stopping.is_set():
+        return
+    chip.restore_firmware_voltage()
+    log("voltage-initialized", previous_mV=8400, readback_mV=FIRMWARE_MV,
+        charge_target_mA=0, **battery)
 
 
 class FullInput:
@@ -167,6 +186,10 @@ def _recover_startup(events, sink, chip, standby):
                 if stopping.wait(0.5):
                     return
                 sink.check(known, 12000)
+                if current == 0:
+                    initialize_voltage(sink, chip, known)
+                if stopping.is_set():
+                    return
                 log("charge-ready", seq=events.seq, previous_mA=current, pd=pd)
                 charge_after_replug(sink, chip, known, wait=events.wait_charging,
                                     initial_current=current)
@@ -174,10 +197,10 @@ def _recover_startup(events, sink, chip, standby):
                 continue
             if current:
                 raise StopCharge("unexpected active charge on the 5 V contract")
-            # Validate BQ and pack limits before asking the PD controller to
-            # renegotiate. The existing 8760 mV gate is intentionally retained.
+            # Zero-current reset state may negotiate first. Its voltage ceiling
+            # can only be initialized after a live 12 V contract and pack check.
             if not full:
-                chip.settings(0)
+                chip.settings(0, voltage=chip.word(0x15))
             if not requested and not expired:
                 if stopping.is_set():
                     return

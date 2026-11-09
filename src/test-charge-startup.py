@@ -196,12 +196,16 @@ class StartupTests(unittest.TestCase):
                     self.run_policy()
                 self.assert_no_power_write()
 
-    def test_nonfull_8400mv_profile_is_not_promoted_to_8760mv(self):
+    def test_nonfull_8400mv_is_not_changed_before_a_12v_contract(self):
         self.poll.return_value = self.five
         self.regs[0x15] = 8400
-        with self.assertRaisesRegex(cs.StopCharge, "voltage limit"):
+        with patch.object(hp, "send") as send:
             self.run_policy()
-        self.assert_no_power_write()
+        self.sink.select.assert_called_once()
+        send.assert_not_called()
+        self.chip.set_current.assert_not_called()
+        self.charge.assert_not_called()
+        self.assertEqual(self.regs[0x15], 8400)
 
     def test_5v_active_firmware_target_is_not_renegotiated(self):
         self.poll.return_value = self.five
@@ -273,6 +277,54 @@ class StartupTests(unittest.TestCase):
                 self.chip.settings(expected, voltage=voltage)
         with self.assertRaisesRegex(cs.StopCharge, "voltage limit"):
             self.chip.settings(0)
+
+    def test_reset_voltage_is_initialized_only_after_contract_and_pack_checks(self):
+        self.regs[0x15] = 8400
+        def write(chip, payload):
+            self.assertEqual(payload, bytes.fromhex("15 38 22"))
+            self.assertEqual(self.regs[0x14], 0)
+            self.sink.check.assert_called_with(hp.profile(self.twelve), 12000)
+            self.regs[0x15] = 8760
+        with patch.object(hp, "send", side_effect=write) as send:
+            self.run_policy()
+        send.assert_called_once()
+        self.charge.assert_called_once()
+
+    def test_voltage_init_refuses_full_faults_bad_requests_and_unknown_settings(self):
+        for battery, change in (
+                (self.full, {}), (dict(self.hungry, flags=0x81), {}),
+                (dict(self.hungry, temp=401), {}),
+                (dict(self.hungry, constant_charge_voltage_max=8500000), {}),
+                (dict(self.hungry, voltage_now=8800000), {}),
+                (self.hungry, {0x15: 8504}), (self.hungry, {0x14: 3776}),
+                (self.hungry, {0x3f: 0}), (self.hungry, {0x20: 0x8080})):
+            with self.subTest(battery=battery, change=change), patch.dict(self.regs, {0x15: 8400, **change}):
+                self.pack.return_value = battery
+                with patch.object(hp, "send") as send, self.assertRaises(cs.StopCharge):
+                    cs.initialize_voltage(self.sink, self.chip, hp.profile(self.twelve))
+                send.assert_not_called()
+
+    def test_voltage_readback_failure_prevents_charge_handoff(self):
+        self.regs[0x15] = 8400
+        with patch.object(hp, "send") as send, self.assertRaisesRegex(cs.StopCharge, "voltage limit"):
+            self.run_policy()
+        send.assert_called_once()
+        self.charge.assert_not_called()
+        self.chip.set_current.assert_not_called()
+
+    def test_voltage_init_rejects_another_input_path(self):
+        self.regs[0x15] = 8400
+        self.sink.switches.return_value = 0
+        with patch.object(hp, "send") as send, self.assertRaisesRegex(cs.StopCharge, "different path"):
+            self.run_policy()
+        send.assert_not_called()
+
+    def test_voltage_init_does_not_write_after_stop(self):
+        self.regs[0x15] = 8400
+        self.stop.set()
+        with patch.object(hp, "send") as send:
+            cs.initialize_voltage(self.sink, self.chip, hp.profile(self.twelve))
+        send.assert_not_called()
 
 
 if __name__ == "__main__":
