@@ -1,5 +1,7 @@
 # NP545XLA 内置摄像头试验
 
+2026-11-09 后续整合：蓝牙与摄像头现已同时启用于默认 Latest，合盖恢复和普通默认启动均已验收，旧 Latest 保留作回退。见[综合日用入口](debian-latest-media.md)。以下保留此前独立试验阶段的说明。
+
 在三星的 GRUB 菜单中选择 **Debian 13 - Camera 720p test (Samsung)**。倒计时默认仍选已验收的 Adreno 桌面。摄像头入口共用原 Lid edge 内核、Adreno 驱动和 USB 根分区。它的专用设备树让 GPIO166 在该次启动期间保持高电平，符合三星固件给内置 USB 摄像头上电的行为。启动服务只加载 UVC 驱动，开始采集需要显式运行测试工具。[三星供电引脚](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L87800) · [USB 供电方法](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L95692)
 
 ## 采集

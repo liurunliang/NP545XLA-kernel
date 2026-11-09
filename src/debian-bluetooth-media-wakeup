@@ -1,0 +1,15 @@
+#!/bin/sh
+# GPIO46 runtime RX wake remains installed; do not arm it for system sleep.
+set -eu
+grep -qw 'np545.media=1' /proc/cmdline || exit 0
+[ "$(id -u)" = 0 ]
+grep -zxq 'samsung,np545xla' /sys/firmware/devicetree/base/compatible
+node=/sys/bus/platform/devices/c8c000.serial
+[ "$(basename "$(readlink "$node/driver")")" = qcom_geni_serial ]
+case "$(cat "$node/power/wakeup")" in
+    enabled) printf 'disabled\n' > "$node/power/wakeup" ;;
+    disabled) ;;
+    *) echo 'Unexpected Bluetooth UART wakeup state' >&2; exit 1 ;;
+esac
+[ "$(cat "$node/power/wakeup")" = disabled ]
+echo 'NP545XLA media: Bluetooth UART system wake disabled; runtime RX wake retained.'

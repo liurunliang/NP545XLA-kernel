@@ -1,8 +1,8 @@
 # Debian U 盘上的 QCA6390 蓝牙测试项
 
-2026-11-09 最新结果：独立蓝牙测试项已通过真机冷启动，自动识别可用 hci0、读取 ROM 0x0200；两轮独立扫描发现同一已知 QMR（末尾 4D:73），实时名称回读正确，扫描期间 Wi-Fi 传输通过。见[最终实现与验收](debian-bluetooth-reverse.md#自动修复冷启动及连续发现验收2026-11-09)。以下保留各阶段配置和结果。
+2026-11-09 最新结果：蓝牙与摄像头已合入默认 Latest，实际待机 40.092 秒后恢复及普通默认启动通过；旧 Latest 保留作回退。见[综合日用验收](debian-latest-media.md)。独立蓝牙冷启动、有效 ROM 0x0200 和同一 QMR 连续两轮发现的先前验收见[蓝牙定位记录](debian-bluetooth-reverse.md#自动修复冷启动及连续发现验收2026-11-09)。以下保留各阶段配置和结果。
 
-三星从 GRUB 的 **Debian 13 - QCA6390 Bluetooth test (Samsung)** 进入独立测试项。默认入口为 **Debian 13 - Latest (Samsung)**。当前蓝牙项使用独立的 7.0.0 Image，只增加 GPIO170 控制权修复并保留合盖修复；Latest 仍使用原镜像。两者共用 USB 根分区和原 GPIO101 服务。测试项的设备树包含本机可信蓝牙地址，`np545.bluetooth=1` 才会加载私有模块目录里的原版上游蓝牙驱动。测试时从 Debian 的 BlueZ 软件包单独解包工具。
+三星从 GRUB 的 **Debian 13 - QCA6390 Bluetooth test (Samsung)** 进入独立测试项。默认入口为 **Debian 13 - Latest (Samsung)**。蓝牙测试项和新 Latest 共用已验收的 7.0.0 Image，包含 GPIO170 控制权修复及合盖修复；旧镜像仍用于 Previous Latest。两者共用 USB 根分区和原 GPIO101 服务。测试项的设备树包含本机可信蓝牙地址，`np545.bluetooth=1` 才会加载私有模块目录里的原版上游蓝牙驱动。测试时从 Debian 的 BlueZ 软件包单独解包工具。
 
 ## 当前自动修复的重建
 
@@ -14,7 +14,7 @@ bash src/build-bluetooth-enable-image.sh "$k/linux-7.0" "$k/obj" "$k/artifacts" 
 bash src/build-bluetooth-enable-boot.sh output/bluetooth/enable/base output/bluetooth-enable/image/Image trusted-address.txt output/bluetooth-enable/boot
 ```
 
-这两个脚本只构建产物。实际安装记录见最终验收；当前机器留在独立蓝牙测试项，八个单次标记已归零，下次默认仍是 Latest。满电时电池请求和 BQ 目标为 0，未强行续充；本次满电 / 5 V 启动导致原服务等待 12 V 超时，恢复过程与策略边界也记录在最终验收中。
+这两个脚本只构建产物。此处脚本重建的是独立蓝牙阶段产物，不直接重建当前综合 Latest；综合构建、默认菜单和九个单次标记的最终记录见[日用验收](debian-latest-media.md)。满电时电池请求和 BQ 目标为 0，未强行续充；本次满电 / 5 V 启动导致原服务等待 12 V 超时，恢复过程与策略边界也记录在最终验收中。
 
 ## 接线与供电
 

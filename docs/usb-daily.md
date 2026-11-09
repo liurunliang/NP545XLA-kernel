@@ -1,5 +1,7 @@
 # 在持久化 Debian U 盘上试验内置设备
 
+2026-11-09 后续整合：蓝牙与摄像头现已同时启用于默认 Latest，合盖恢复和普通默认启动均已验收，旧 Latest 保留作回退。见[综合日用入口](debian-latest-media.md)。以下保留此前独立试验阶段的说明。
+
 启动菜单的前三项是诊断系统，第四项使用已验收的原 Debian 设备树。第五项 **Debian 13 - daily desktop (Samsung)** 使用单独的日用设备树，可手动选择以回退。当前 SanDisk 的默认项是 **Debian 13 - Adreno unified DRM trial (Samsung)**。这些 Debian 入口共用 USB 根文件系统和系统账户，均关闭内置 UFS。更新日用设备树后，菜单中的 **previous daily device tree** 可启动前一版日用配置。
 
 内置摄像头使用单独的 **Camera 720p test** 启动项。[安装和验证摄像头](debian-camera.md)。电池电量、充放电电流和合盖待机测量使用独立的 **Battery read-only test** 入口。[电池试验记录](debian-battery.md)

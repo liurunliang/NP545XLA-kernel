@@ -74,6 +74,17 @@ backup="$loader.pre-media-${expected:0:16}"
 [[ ! -e $backup ]] || cmp "$backup" "$loader"
 [[ -e $backup ]] || cp "$loader" "$backup"
 cmp "$backup" "$loader"
+# Scoped by np545.media=1 inside the helper; old independent entries retain
+# their original system-wakeup behavior. Require review of conflicting files.
+helper=/usr/lib/np545xla-bluetooth/set-media-wakeup
+dropin=/etc/systemd/system/np545-bluetooth.service.d/80-media-wakeup.conf
+[[ ! -e $helper ]] || cmp "$here/debian-bluetooth-media-wakeup" "$helper"
+[[ ! -e $dropin ]] || cmp "$here/debian-bluetooth-media.conf" "$dropin"
+install -Dm755 "$here/debian-bluetooth-media-wakeup" "$helper"
+install -Dm644 "$here/debian-bluetooth-media.conf" "$dropin"
+systemd-analyze verify np545-bluetooth.service
+systemctl daemon-reload
+"$helper"
 publish() {
     local input=$1 target=$2
     cp "$input" "$target.new"
