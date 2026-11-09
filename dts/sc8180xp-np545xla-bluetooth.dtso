@@ -70,7 +70,8 @@
 	uart-has-rtscts;
 	bluetooth {
 		compatible = "qcom,qca6390-bt";
-		max-speed = <3200000>;
+		/* Preserve the rate verified with GPIO170 ownership enabled. */
+		max-speed = <3000000>;
 		vddrfacmn-supply = <&bt_common>;
 		vddaon-supply = <&bt_aon>;
 		vddbtcmx-supply = <&bt_cmx>;

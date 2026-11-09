@@ -1,0 +1,59 @@
+NP545XLA isolated Bluetooth test: claim GPIO170 APSS ownership.
+Default off; enable only in the Bluetooth test entry with
+pinctrl_msm.np545_bt_egpio=1. Other GPIOs and GENI UART are unchanged.
+
+Reuses the existing pinctrl-msm eGPIO present bit 11 / enable bit 12
+mechanism. The board driver package qcgpio.sys uses the same bits.
+Runtime A/B/A read valid ROM 0x0200 only with ownership enabled.
+This board-scoped test is not a claim of complete SC8180x eGPIO support.
+
+--- a/drivers/pinctrl/qcom/pinctrl-msm.c
++++ b/drivers/pinctrl/qcom/pinctrl-msm.c
+@@ -34,6 +34,11 @@
+ #include "../pinmux.h"
+ 
+ #include "pinctrl-msm.h"
++
++/* Board-isolated trial of the upstream eGPIO ownership mechanism. */
++static bool np545_bt_egpio;
++module_param(np545_bt_egpio, bool, 0400);
++MODULE_PARM_DESC(np545_bt_egpio, "Claim NP545XLA Bluetooth GPIO170 for APSS");
+ 
+ #define MAX_NR_GPIO 300
+ #define MAX_NR_TILES 4
+@@ -164,6 +169,7 @@
+ 	const struct msm_pingroup *g;
+ 	unsigned long flags;
+ 	u32 val, mask;
++	bool bt_owner = false, bt_owned = false;
+ 	int i;
+ 
+ 	g = &pctrl->soc->groups[group];
+@@ -225,9 +231,27 @@
+ 			val |= BIT(g->egpio_enable);
+ 	}
+ 
++	/* GPIO170 is the only board pin qualified by the on-device A/B test.
++	 * The present/ownership bits match the upstream eGPIO implementation
++	 * and the OEM qcgpio driver. Other pins retain their existing policy.
++	 */
++	bt_owner = np545_bt_egpio && group == 170 && i == gpio_func &&
++		of_device_is_compatible(pctrl->dev->of_node, "qcom,sc8180x-tlmm") &&
++		of_machine_is_compatible("samsung,np545xla");
++	if (bt_owner && (val & BIT(11)))
++		val |= BIT(12);
+ 	msm_writel_ctl(val, pctrl, g);
++	if (bt_owner)
++		bt_owned = (msm_readl_ctl(pctrl, g) & (BIT(11) | BIT(12))) ==
++			   (BIT(11) | BIT(12));
+ 
+ 	raw_spin_unlock_irqrestore(&pctrl->lock, flags);
++	if (bt_owner) {
++		if (!bt_owned)
++			return -EIO;
++		dev_info_once(pctrl->dev,
++			"NP545XLA Bluetooth GPIO170: APSS ownership enabled\n");
++	}
+ 
+ 	if (d && i == gpio_func &&
+ 	    test_and_clear_bit(d->hwirq, pctrl->disabled_for_mux)) {
