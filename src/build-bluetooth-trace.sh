@@ -57,6 +57,7 @@ modinfo -p "$stage/hci_uart.ko" | grep -F 'qca_startup_trace:'
 grep -aqF 'QCA_STARTUP' "$stage/hci_uart.ko"
 if [[ -n $probe ]]; then
     modinfo -p "$stage/hci_uart.ko" | grep -F 'qca_initial_version_only:'
+    modinfo -p "$stage/hci_uart.ko" | grep -F 'qca_initial_rts_wake:'
 fi
 if cmp -s "$stage/hci_uart.ko" "$obj/$module"; then
     echo 'Trace module unexpectedly matches the original' >&2; exit 1
@@ -72,6 +73,7 @@ fi
     if [[ -n $probe ]]; then
         echo 'Additional parameter: qca_initial_version_only=1 on NP545XLA QCA6390 only'
         echo 'One initial-rate version query; no FC48, firmware download or scan initialization.'
+        echo 'Optional qca_initial_rts_wake=1 adds one 5 ms RTS deassert/assert timing probe.'
         echo 'Returns an initialization error even after a successful diagnostic query.'
         sha256sum "$probe_fix"
     fi

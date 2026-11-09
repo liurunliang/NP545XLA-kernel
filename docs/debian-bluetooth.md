@@ -242,3 +242,27 @@ Windows 可正常通信和扫描，没有使本轮 Linux 低速握手恢复。�
 查询后经 `wlp1s0` 实际下载 138612 字节 Debian Release，摘要仍为 `ed56aac47e7911e65ee63aae8d67e29f20e023f840e49f8ed037043a33de138a`。仍使用内置 UART 驱动，临时 FIFO / DMA 模块未加载，LightDM 和 GPIO101 续充服务活动。回读 USB EFI 与原冷启动菜单一致，八个单次标记均为 0，默认 Latest 保留。记录在 `output/bluetooth/startup-trace/after-windows-complete/` 和对应启动历史目录。另保留首次取证因设备树路径写错而提前退出的 `after-windows/`；该错误不涉及硬件写入，随后在同次启动完成采集。
 
 随后正常重启进入默认 Latest，实际启动 ID 为 `a6c85b80-7f0c-4941-95c3-63f232c36a69`，同一 USB 根分区，命令行不含 `np545.bluetooth=1`，蓝牙测试服务 inactive。LightDM 与 GPIO101 续充服务 active；该默认启动再次经 Wi-Fi 完成同一文件下载，大小和摘要与测试项一致。独立诊断副本及有容量限制的启动日志暂保留，供后续初始化对照；未改变默认入口。
+
+
+## RTS 唤醒调用及寄存器对照（2026-11-09）
+
+参考本机已核验的 Windows 原厂驱动，增加默认关闭的 `qca_initial_rts_wake`。它仅在 NP545XLA、QCA6390 和 `qca_initial_version_only=1` 同时满足时生效，在 115200 版本查询前撤销 / 恢复 RTS，各等待约 5 ms。使用上游 `hci_uart_set_flow_control()` 相同的 serdev 调用，并记录 RTS 返回码和原始 TIOCM 值；仍不下载固件、不进入扫描。原厂 `bt_hci_qca_wakeup_valkyrie` 分支有 CTS 条件，本实验强制执行一次脉冲，不能据此声称 Windows 在本机执行了该分支。
+
+安装的是独立模块副本和临时 `73-rts-probe.conf`；未更换 Image、DTB 或 EFI。正常重启进入测试项，启动 ID `6587b5a8-1ce1-49c4-b150-aaf6b2c48693`，不计作冷启动。先按关闭 / 开启 / 关闭参数做 A/B/A，三次均发送 `01 00 fc 01 19`、收到 `00 40 fc 01 19`，最终 `-110`。GPIO44 数字输入均只采到一次下降沿，因此最初仅能确认调用发生，不能确认脉冲到达引脚。
+
+进一步记录返回值，并用只读 MMIO 对照 UART 的 `SE_UART_MANUAL_RFR`、`SE_GENI_IOS` 和 GPIO43–46。读取 UART 寄存器的三组窗口统一临时将串口 `power/control` 设为 `on`，确认 runtime active；退出恢复 `auto`，实际回读 suspended。自动省电下的第一组仅采 GPIO，不读取可能已关时钟的 UART。每次采样限时 0.5 秒、无溢出；这些都是同次启动中的运行中诊断。
+
+| 诊断条件 | RTS 调用 / TIOCM | 接收的五个字节 | 版本结果 |
+|---|---|---|---|
+| 自动省电，脉冲开启 | 两次返回 0；358 → 354 → 358 | `00 40 fc 01 19` | `-110` |
+| 保持串口运行，脉冲关闭 | 不额外切换 | `00 40 fc 01 19` | `-110` |
+| 保持串口运行，脉冲开启 | 两次返回 0；358 → 354 → 358 | `01 00 fc 01 19` | `-110` |
+| 保持串口运行，再次关闭 | 不额外切换 | `01 00 fc 01 19` | `-110` |
+
+保持运行时，脉冲组在 GPIO44 采到约 5.848 ms 的高电平窗口；同窗口 RFR 读值从 0 变为 `0x80000000`，再回到 0。GPIO43 仍为低。原始 TIOCM 非负、CTS 位保持有效，RTS 位实际切换，因此这次可以排除把 serdev 错误返回误当作 CTS 的解释。寄存器读回没有保留 READY / NOT_READY 命令位，不能把读值直接当成软件写值。数字输入不代表模拟电压测量。
+
+此后接收数据与发送命令完全相同，也不是 HCI 事件；没有读出芯片版本。A/B/A 的后一个基线仍出现相同变化，不能将接收字节变化独归因于 RTS 脉冲。单独补这个时序和保持串口运行均未恢复握手。后续转向固件及原厂初始化代码的离线分析。
+
+首版模块摘要 `4f3db155560efea2a722a97534c8d8bdc4578315e752ad2a6c28fee1da2f431a`；带返回值版 `f0c83fadf8dc2185d8a1b26bb7e58a2a24ac3e911dcc38699f6884869ea610e7`。两次构建都核验原源码、Image、配置、符号表和原模块不变。源码、构建、原始采样及分析保存在忽略目录 `output/bluetooth/rts-wake/`。
+
+结束时撤销本轮 73 覆盖，恢复原 72 低速诊断配置；UART 仍绑定内置驱动，`driver_override` 为空。EFI 摘要仍为 `d86e7ec81e18cebd1feba385cd5494d790f2bb1540330f1c39c0f9773cd96fea`，八个单次标记均为 0。随后实际进入默认 Latest，启动 ID `05e6607c-82c9-4ab8-8758-fe53561fae24`，命令行没有蓝牙标记、hci_uart 未加载、测试服务 inactive，LightDM 和 GPIO101 续充服务 active。测试项和默认项分别经 `wlp1s0` 下载 138612 字节，摘要均为 `ed56aac47e7911e65ee63aae8d67e29f20e023f840e49f8ed037043a33de138a`。

@@ -2,12 +2,19 @@ Optional diagnostic applied after linux-7.0-qca6390-startup-trace.patch.
 It reuses the upstream qca_read_soc_version() at the initial 115200 rate
 before any FC48 baud command. It shuts the BT power sequence down after
 one query and never proceeds to firmware download or scanning.
-The parameter is disabled by default and gated to NP545XLA QCA6390.
+The parameters are disabled by default and gated to NP545XLA QCA6390.
 A successful query still returns -ECANCELED: this is not an HCI setup fix.
+
+qca_initial_rts_wake optionally adds one deassert/assert pulse, holding
+both phases for approximately 5 ms. It uses the same serdev calls as the
+upstream flow-control helper, records their RTS return values and restores
+normal flow control before the query. This is an unconditional timing
+experiment inside the initial-version probe, not
+proof that the OEM CTS-conditional wake branch executes on this machine.
 
 --- a/drivers/bluetooth/hci_qca.c
 +++ b/drivers/bluetooth/hci_qca.c
-@@ -47,6 +47,12 @@
+@@ -47,6 +47,17 @@
  module_param(qca_startup_trace, bool, 0444);
  MODULE_PARM_DESC(qca_startup_trace,
  		"Log at most 64 QCA6390 UART chunks before version discovery");
@@ -17,15 +24,40 @@ A successful query still returns -ECANCELED: this is not an HCI setup fix.
 +module_param(qca_initial_version_only, bool, 0444);
 +MODULE_PARM_DESC(qca_initial_version_only,
 +		"NP545XLA QCA6390: read version at 115200 without switching rate");
++
++static bool qca_initial_rts_wake;
++module_param(qca_initial_rts_wake, bool, 0444);
++MODULE_PARM_DESC(qca_initial_rts_wake,
++		"Initial-version probe only: pulse RTS before querying NP545XLA QCA6390");
  
  /* HCI_IBS protocol messages */
  #define HCI_IBS_SLEEP_IND	0xFE
-@@ -2030,6 +2036,20 @@
+@@ -2030,6 +2041,40 @@
  		qca_set_speed(hu, QCA_INIT_SPEED);
  	}
  
 +	if (qca_initial_version_only && soc_type == QCA_QCA6390 &&
 +	    of_machine_is_compatible("samsung,np545xla")) {
++		/* Timing experiment: the OEM wake branch is CTS-conditional. */
++		if (qca_initial_rts_wake) {
++			int rts_ret;
++
++			bt_dev_info(hdev, "QCA_INITIAL_RTS before tiocm=%d",
++				    serdev_device_get_tiocm(hu->serdev));
++			/* Same serdev calls as hci_uart_set_flow_control(),
++			 * but preserve the RTS return value for diagnostics.
++			 */
++			serdev_device_set_flow_control(hu->serdev, false);
++			rts_ret = serdev_device_set_rts(hu->serdev, false);
++			bt_dev_info(hdev, "QCA_INITIAL_RTS deassert ret=%d tiocm=%d",
++				    rts_ret, serdev_device_get_tiocm(hu->serdev));
++			usleep_range(5000, 5500);
++			serdev_device_set_flow_control(hu->serdev, true);
++			rts_ret = serdev_device_set_rts(hu->serdev, true);
++			bt_dev_info(hdev, "QCA_INITIAL_RTS assert ret=%d tiocm=%d",
++				    rts_ret, serdev_device_get_tiocm(hu->serdev));
++			usleep_range(5000, 5500);
++		}
 +		bt_dev_info(hdev,
 +			    "QCA_INITIAL_VERSION begin rate=115200 CTS=%d",
 +			    serdev_device_get_cts(hu->serdev));
