@@ -45,3 +45,43 @@ src/build-charge-boot.sh output/battery/boot output/charge/boot
 未经写入的测量保存在构建机的 `output/charge/samples-final.jsonl`。与测试前的 EFI 相比，只有已有电池项使用的 DT 路径及诊断服务启动参数发生变化。旧电池 DT 和启动器备份均保留。
 
 采样后，两项一次性标记均为 0，正常重启进入原默认桌面，启动 ID 为 `9126bdda-b4cb-43aa-9bde-5b9310740460`。LightDM 活动，Adreno 的 separate_gpu_kms=N，测试服务未运行，设备使用同一个 USB 根分区。记录见 `output/charge/return.txt` 和 `daily-confirmed.txt`。
+
+## qcom_battmgr 固件接口核查（2026-11-09）
+
+结论：所检查的两个 NP545XLA 原厂 ADSP 镜像缺少同平台参考固件中承载 PMIC GLINK 充电服务的加载段。直接加载 `qcom_battmgr`、增加设备树节点或安装 ADSP 模块，不能补出这个固件服务。现有证据支持继续以三星 EmuEC 对应的 I²C 硬件路径完善充电；若迁入内核，应接入 `power_supply` / Type-C 等标准子系统，而非把寄存器控制塞入 GLINK 客户端。
+
+### 驱动需要什么
+
+实际构建的 Linux 7.0 源码包含 `qcom,sc8180x-pmic-glink` 匹配，使用 SC8280XP 协议分支。`pmic_glink.c` 等待 RPMSG 通道 `PMIC_RTR_ADSP_APPS`，并通过 PDR 查询 `tms/servreg` 的 `msm/adsp/charger_pd`。SC8180X 的 `qcom_battmgr` 电池对象提供属性读取，驱动没有直接操作三星 S2MM005、BQ25710 的实现；持续充电依赖对端固件。内核 `qcom_pd_mapper` 中的域名是平台映射表，出现 `charger_pd` 映射本身不证明固件提供该服务。[上游驱动](https://github.com/torvalds/linux/blob/v7.0/drivers/power/supply/qcom_battmgr.c) · [GLINK 通道与 PDR 查询](https://github.com/torvalds/linux/blob/v7.0/drivers/soc/qcom/pmic_glink.c) · [PD 映射表](https://github.com/torvalds/linux/blob/v7.0/drivers/soc/qcom/qcom_pd_mapper.c)
+
+### 原厂与参考固件的离线对照
+
+三星输入来自 [NP545XLA 原厂导出包](https://github.com/tordona/woa-device-drivers/releases/tag/samsung-np545xla-drivers)。完整归档 SHA256 与发布值一致：`ec290dd56fc2844f48707751d769f6b425a8fa1cd7fdb56e5f3e4b4390900478`。分别检查其中 2021 与 2023 两个 ADSP 驱动目录；INF 均包含本机 `SUBSYS_C1A1144D`。
+
+对照输入为 [SC8180X 参考驱动固定提交中的 ADSP CAB](https://github.com/WOA-Project/Qualcomm-Reference-Drivers/blob/81bbe7ab8925e6d045f719711feeb01ed15deb50/8180_CLS/200.0.64.0/qcsubsys_ext_adsp8180.cab)，版本 `08/13/2021,1.0.1610.0000`。下载文件的 Git blob SHA1 与该提交目录记录一致；CAB SHA256 为 `951e95cd474c0e22a52f724429c1a9a9ae24d63e9932266c43ecc8061cd02e90`。它的 INF 匹配参考板，未列出三星 `C1A1144D`；本轮仅离线分析，未加载到三星。
+
+| 镜像 | 文件字节数 | ELF 程序头数 | `PMIC_RTR_ADSP_APPS` / 完整 `msm/adsp/charger_pd` |
+| --- | ---: | ---: | --- |
+| 三星 `06/21/2021,1.0.1530.0002` | 10,744,632 | 15 | 均未找到 |
+| 三星 `03/13/2023,1.0.1530.0003` | 10,744,632 | 15 | 均未找到 |
+| 高通参考 `08/13/2021,1.0.1610.0000` | 11,659,764 | 19 | 均找到 |
+
+参考镜像具有三星两个镜像均未包含的四个 PT_LOAD 段，虚拟地址分别为 `0x60000000`、`0x600f2000`、`0x6019e000`、`0x6019f000`。其中第 9 段同时包含完整服务路径（文件偏移 `0x3fed4c`）、`BattMngrDevice_InitContext`（`0x40202d`）以及 PMIC 通道名（`0x40ec00`）；第 12 段也有电池管理函数信息。这是加载段与接口内容共同构成的证据，强于仅对字符串做阴性搜索。
+
+三星镜像仍保留 `charger_process`、`battman_policy.c` 和 `charger_pd` 等公共线索。其中两处 `charger_pd` 位于并列 `sensor_pd`、`root_pd` 的域名表，不是完整服务注册路径。不能据此宣称充电域可以运行。
+
+三个 ADSP 镜像 SHA256 分别为：
+
+- 三星 2021：`a1cb626f9cdcd1e4130e30267d646609684e7bf34d8f8f8e9128f101cb0e0616`
+- 三星 2023：`4ad21f21c7ee1962e492b1324f7562822e3c6e1d1d35895bb523f96b3c80ff14`
+- 高通参考：`008847ec80d03f745d8db9302c21c801ce97cc7ccd1b48758d272f5414ba1f29`
+
+### 三星 Windows 路径与 Linux 现场
+
+原厂包带有 `qcpmicglink8180.sys`，二进制确含同名 PMIC 通道，但其 INF 匹配 `ACPI\QCOM049A`，本机 DSDT 没有这个 HID。相反，DSDT 的电池 `PMBM/QCOM0263` 依赖三星 `PM3P/SAM0606`；`PM3P.GBST` 从 `EMEC.CHGS` 读取状态，`EMEC/SAM0604` 列出 IC10、IC19、IC20 等 I²C 资源。Windows 枚举报告 `Samsung PMIC 3rd Party Driver` 和 `Samsung EmuEC Device` 为 OK。`SecPmic3p.sys` 同时包含 `GBST`、`PMCF` 方法标识。结合此前 EmuEC 的 PD 与 BQ25710 代码分析，不能将“Qualcomm Battery”设备名称或驱动包中存在 GLINK 文件等同于使用 GLINK 充电。[DSDT 电池依赖](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L603) · [EmuEC 资源](dump/NP545XLA-hw-dump/redisasm/dsdt.dsl#L93743)
+
+当前真机启动 `a20d1a8c-9281-4dc5-b0a6-00d344467797` 的只读采集确认：内核配置将 BATTMGR、PMIC GLINK、Q6V5 PAS、PD mapper、GLINK SMEM 设为模块，但 `modinfo` 查不到对应模块；`/lib/firmware` 未发现 ADSP 镜像。活动设备树的 `remoteproc@17300000` 为 `okay`，指向三星 `qcadsp8180.mbn`，没有 PMIC GLINK 节点；`remoteproc` 和 `rpmsg` 设备列表为空。因此当前未出现通道也有部署层原因，单独不能作为固件不支持的证据。
+
+本轮未安装或启动 ADSP，未改写充电芯片，未验证任何 GLINK 请求回复。结论限定于已核验原厂包中的两版固件；其他未知版本或固件内部动态机制不在已验证范围。参考固件的存在不构成本机可用性证据。
+
+可复核证据归档在 `output/charge-startup-20261109/qcom-battmgr/`：`live-platform.json`、`segment-comparison.json`、`adsp-comparison.json`、归档目录与哈希、解码后的 INF 和接口字符串位置。`inspect-firmware.py IMAGE...` 可重新读取 ELF 程序头并定位标识；`collect-live.py` 仅读取运行状态。原厂大归档继续复用 `output/gpu-firmware/NP545XLA.7z`，未向 Git 提交固件二进制。
