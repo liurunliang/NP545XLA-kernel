@@ -1,0 +1,43 @@
+Optional diagnostic applied after linux-7.0-qca6390-startup-trace.patch.
+It reuses the upstream qca_read_soc_version() at the initial 115200 rate
+before any FC48 baud command. It shuts the BT power sequence down after
+one query and never proceeds to firmware download or scanning.
+The parameter is disabled by default and gated to NP545XLA QCA6390.
+A successful query still returns -ECANCELED: this is not an HCI setup fix.
+
+--- a/drivers/bluetooth/hci_qca.c
++++ b/drivers/bluetooth/hci_qca.c
+@@ -47,6 +47,12 @@
+ module_param(qca_startup_trace, bool, 0444);
+ MODULE_PARM_DESC(qca_startup_trace,
+ 		"Log at most 64 QCA6390 UART chunks before version discovery");
++
++/* Diagnostic only: query once at the boot rate, before FC48, then stop. */
++static bool qca_initial_version_only;
++module_param(qca_initial_version_only, bool, 0444);
++MODULE_PARM_DESC(qca_initial_version_only,
++		"NP545XLA QCA6390: read version at 115200 without switching rate");
+ 
+ /* HCI_IBS protocol messages */
+ #define HCI_IBS_SLEEP_IND	0xFE
+@@ -2030,6 +2036,20 @@
+ 		qca_set_speed(hu, QCA_INIT_SPEED);
+ 	}
+ 
++	if (qca_initial_version_only && soc_type == QCA_QCA6390 &&
++	    of_machine_is_compatible("samsung,np545xla")) {
++		bt_dev_info(hdev,
++			    "QCA_INITIAL_VERSION begin rate=115200 CTS=%d",
++			    serdev_device_get_cts(hu->serdev));
++		ret = qca_read_soc_version(hdev, &ver, soc_type);
++		bt_dev_info(hdev, "QCA_INITIAL_VERSION result=%d CTS=%d",
++			    ret, serdev_device_get_cts(hu->serdev));
++		atomic_set(&qca->startup_trace_left, 0);
++		qca_power_shutdown(hu);
++		/* A successful query is still a probe, not an initialized HCI. */
++		return ret ? ret : -ECANCELED;
++	}
++
+ 	/* Setup user speed if needed */
+ 	speed = qca_get_speed(hu, QCA_OPER_SPEED);
+ 	if (speed) {

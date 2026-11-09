@@ -61,7 +61,14 @@ with menu.open("a") as output:
 if search --no-floppy --file --set=bt_esp /boot/np545-bluetooth.env; then
     set bt_env="(${bt_esp})/boot/np545-bluetooth.env"
     load_env --file "$bt_env" np545_bluetooth_once
-    if [ "$np545_bluetooth_once" = 1 ]; then
+    if [ "$np545_bluetooth_once" = 2 ]; then
+        set np545_bluetooth_once=1
+        if save_env --file "$bt_env" np545_bluetooth_once; then
+            set default=bluetooth
+            set timeout_style=menu
+            set timeout=-1
+        fi
+    elif [ "$np545_bluetooth_once" = 1 ]; then
         set np545_bluetooth_once=0
         if save_env --file "$bt_env" np545_bluetooth_once; then set default=bluetooth; fi
     fi
