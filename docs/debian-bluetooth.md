@@ -186,3 +186,16 @@ bash src/build-bluetooth-trace.sh /var/tmp/np545xla-diag/linux-7.0 \
 本轮最后仍绑定原内置 UART，临时传输模块已卸载。经 `wlp1s0` 完成 138612 字节 HTTPS 下载，SHA-256 为 `ed56aac47e7911e65ee63aae8d67e29f20e023f840e49f8ed037043a33de138a`。LightDM、GPIO101 续充服务活动；ESP 回读仍为已验证的冷启动菜单，八个一次性标记均为 0，默认 Latest 保留。Windows 交接前保留私有低速诊断副本，便于随后做 Windows 到 Linux 的对照。
 
 原始证据位于 `output/bluetooth/startup-trace/after-cold/`、`ordered-samples/`、`after-cold-final/`、`fifo-compare/`、`oem-uart/`；其中包括源码、构建记录、完整内核片段、采样和菜单回读。上述 UART 变体和数字采样均为运行中实验，不冒充另一轮冷启动。
+
+
+## Windows 对照采集准备
+
+`docs/dump/NP545XLA-BluetoothBaseline.ps1` 使用 Windows 自带 PnP、CIM、PnPUtil、注册表读取和公开蓝牙 API，读取当前机器的硬件 ID、UART 资源、实际服务与驱动文件摘要、设备参数、DSDT 及近期蓝牙日志。默认尝试两次 12.8 秒 BR/EDR inquiry，间隔 3 秒；`-SkipInquiry` 可只取静态信息。它不配对设备、不改驱动或注册表，也不切换蓝牙开关。没有 `-UploadUri` 时，所有报告只保存在 Windows 本机 `%LOCALAPPDATA%\NP545-Bluetooth\`。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\NP545XLA-BluetoothBaseline.ps1
+```
+
+该 API 不发现仅支持 BLE 的设备；搜索结果同时记录记忆 / 配对状态和原始 last-seen 时间，不能把缓存中存在设备当成两次现场扫描成功。Windows 返回的 LMP / HCI 运行时版本也不等同于 Linux 在下载固件前请求的 `0xfc00` ROM 版本。[Windows inquiry API](https://learn.microsoft.com/en-us/windows/win32/api/bluetoothapis/nf-bluetoothapis-bluetoothfindfirstdevice) · [射频信息结构](https://learn.microsoft.com/en-us/windows/win32/api/bluetoothapis/ns-bluetoothapis-bluetooth_radio_info)
+
+PowerShell 语法解析、嵌入 C# 编译及 64 位原生结构大小检查均已通过。Windows 实机执行及标牌发现尚待验证。为交接 Windows，已在仍为 `0d8ebe70` 的 Debian 中校验 USB 和 EFI，将蓝牙单次标记从 0 设为 2，并发送正常重启；GRUB 应保存为 1 后停在菜单。用户可在菜单处关机并移除 Debian U 盘，再启动原 Windows。下一次插回 USB 开机会单次运行现有蓝牙诊断，此后默认仍是 Latest。该交接没有设置固件 BootNext；当前内核的 EFI 变量不可用。
