@@ -78,3 +78,32 @@ sudo bash install-daily-boot.sh --bluetooth boot manifest.txt
 新版 DTB SHA-256 为 `d24e97db822d43d3460a0eb5f25ae3ea3b51ebe7ab64d5303ea2e224b4de33fa`。原始采样、IRQ 计数、HCI 日志、设备树和 GRUB 差异在工作区 `output/bluetooth/gpio46-rx-wake/`。
 
 八个一次性标记均已清零。三星普通重启进入默认 Latest（启动 ID `31c676f5-22fa-492e-ace1-d6fcdbf21aca`），同一 Debian U 盘、LightDM 和 Wi-Fi 正常，蓝牙测试服务 inactive，临时观测器已移除。
+
+
+## 启动串口字节观测（2026-11-09）
+
+复用现有私有模块与独立启动项，在 `hci_qca` 增加默认关闭的 `qca_startup_trace` 参数。它记录发送队列出队、H4 解析前的原始接收字节、切速前后的软件速率值。每次初始化最多记录 64 段，每段最多 64 字节；读到版本后、下载固件前停止，初始化最终失败时也停止。[构建脚本](../src/build-bluetooth-trace.sh)使用现有 lid 构建的私有挂载空间方法，保持原始源码、内核 Image、原模块、配置和符号文件不变。观测位置参考[上游 GENI 跟踪实现](https://github.com/torvalds/linux/commit/6e5bd7cc3a2f304a66d294011647d82074421979)。
+
+```sh
+bash src/build-bluetooth-trace.sh /var/tmp/np545xla-diag/linux-7.0 \
+    /var/tmp/np545xla-diag/obj /var/tmp/np545xla-diag/artifacts NEW_OUTPUT_DIR
+```
+
+日志模块 SHA-256 为 `7213637eab43248b27ebd42513304d90e3710c274e41efdfec7b92f83b1423d1`，原模块为 `2f8c4ee61682cdb0954e5481396a0827875020ce54753741003ac127ff83ec00`。目标机复制整个私有模块目录到 `/usr/lib/np545xla-bluetooth-startup-trace`，只在副本替换 `hci_uart.ko`；服务的独立 drop-in 指向副本并传入参数。服务仍受 `np545.bluetooth=1` 限制。原模块目录保留。构建及安装取证在 `output/bluetooth/startup-trace/`。
+
+3.2M 项在正常关机后自行开机，启动 ID 为 `dddb26d4-0892-460e-8925-e2f9cb26eba4`。用户确认没有再次按键，因此本次不能证明机器持续关机 10 秒的冷启动条件。GPIO170、GPIO46、供电配置与原测试项一致，日志参数实际读回为 `Y`。四轮初始化均失败，第一轮为：
+
+| 开机后时间 | 观测 |
+|---|---|
+| 20.165040 s | 115200 下出队切速命令 `01 48 fc 01 11` |
+| 20.167029 s | 收到 `00 40 8a 01 11`，随后 H4 返回 `-84` |
+| 20.484041 s | 切速调用返回，软件报告 3200000 |
+| 20.484090 s | 出队版本请求 `01 00 fc 01 19` |
+| 20.484216 s | 收到 `00 00`，随后 H4 返回 `-84` |
+| 22.496103 s | 版本读取失败 `-110` |
+
+第三轮在 115200 下收到的五个字节与切速命令逐字节相同。其余三轮均为上述部分字节不同的五字节串；四轮切至 3.2M 后均只收到 `00 00`。这些是串口交给 HCI 驱动的字节，尚不能证明它们来自蓝牙芯片，也不能证明是硬件环回。`TX_DEQUEUE` 只表示驱动出队，`serdev_reported` 是软件返回值，都不是焊盘上的测量。
+
+失败后短暂唤醒 UART13，只读检查非破坏性寄存器，再恢复原 `power/control=auto`。环回寄存器为零，IO 路由值为 `0x31c`，收发数据位均为 8、配置无校验。QUP 版本为 `0x10030000`，串口时钟框架报告 102.4 MHz，收发分频均为 1，符合该版本 32 倍采样下的 3.2M 配置。此快照采自初始化结束后，未覆盖切速瞬间，也没有示波器波形。
+
+同次启动通过 `wlp1s0` 下载 Debian trixie Release 文件，内容与测试前逐字节相同，SHA-256 为 `ed56aac47e7911e65ee63aae8d67e29f20e023f840e49f8ed037043a33de138a`；传输期间 RX 增加 186264 字节、TX 增加 8328 字节。蓝牙管理接口仍报告零个控制器，尚不能执行目标设备扫描。

@@ -1,0 +1,135 @@
+Bounded, opt-in UART startup observation for the isolated NP545XLA test.
+Preserve the v7.0 QCA6390 command sequence, delays, flow control and rates.
+Capture TX dequeue and raw RX before H4 parsing; stop on version success or
+64 chunks across retries. serdev_reported is a software value, not a wire
+measurement. No raw user traffic is logged after version discovery.
+
+Observation points follow the upstream GENI tracing approach in
+6e5bd7cc3a2f304a66d294011647d82074421979. This module-level diagnostic works
+with the existing kernel, which was built without ftrace.
+
+--- a/drivers/bluetooth/hci_qca.c
++++ b/drivers/bluetooth/hci_qca.c
+@@ -15,6 +15,7 @@
+  *  by Maxim Krasnyansky and Marcel Holtmann.
+  */
+ 
++#include <linux/atomic.h>
+ #include <linux/kernel.h>
+ #include <linux/clk.h>
+ #include <linux/completion.h>
+@@ -41,6 +42,12 @@
+ #include "hci_uart.h"
+ #include "btqca.h"
+ 
++/* Opt-in diagnostics for the private NP545XLA test module. */
++static bool qca_startup_trace;
++module_param(qca_startup_trace, bool, 0444);
++MODULE_PARM_DESC(qca_startup_trace,
++		"Log at most 64 QCA6390 UART chunks before version discovery");
++
+ /* HCI_IBS protocol messages */
+ #define HCI_IBS_SLEEP_IND	0xFE
+ #define HCI_IBS_WAKE_IND	0xFD
+@@ -141,6 +148,7 @@
+ 
+ struct qca_data {
+ 	struct hci_uart *hu;
++	atomic_t startup_trace_left;
+ 	struct sk_buff *rx_skb;
+ 	struct sk_buff_head txq;
+ 	struct sk_buff_head tx_wait_q;	/* HCI_IBS wait queue	*/
+@@ -1272,6 +1280,19 @@
+ 	{ QCA_IBS_SLEEP_IND_EVENT, .recv = qca_ibs_sleep_ind },
+ };
+ 
++/* Observe bytes before H4 can reject them. TX is dequeued, not wire-proven. */
++static void qca_trace_startup(struct hci_uart *hu, const char *direction,
++			      const void *data, int count)
++{
++	struct qca_data *qca = hu->priv;
++
++	if (count <= 0 || atomic_dec_if_positive(&qca->startup_trace_left) < 0)
++		return;
++
++	bt_dev_info(hu->hdev, "QCA_STARTUP %s len=%d head=%*ph",
++		    direction, count, min(count, 64), data);
++}
++
+ static int qca_recv(struct hci_uart *hu, const void *data, int count)
+ {
+ 	struct qca_data *qca = hu->priv;
+@@ -1279,6 +1300,7 @@
+ 	if (!test_bit(HCI_UART_REGISTERED, &hu->flags))
+ 		return -EUNATCH;
+ 
++	qca_trace_startup(hu, "RX", data, count);
+ 	qca->rx_skb = h4_recv_buf(hu, qca->rx_skb, data, count,
+ 				  qca_recv_pkts, ARRAY_SIZE(qca_recv_pkts));
+ 	if (IS_ERR(qca->rx_skb)) {
+@@ -1294,8 +1316,11 @@
+ static struct sk_buff *qca_dequeue(struct hci_uart *hu)
+ {
+ 	struct qca_data *qca = hu->priv;
+-
+-	return skb_dequeue(&qca->txq);
++	struct sk_buff *skb = skb_dequeue(&qca->txq);
++
++	if (skb)
++		qca_trace_startup(hu, "TX_DEQUEUE", skb->data, skb->len);
++	return skb;
+ }
+ 
+ static uint8_t qca_get_baudrate_value(int speed)
+@@ -1390,10 +1415,21 @@
+ 
+ static inline void host_set_baudrate(struct hci_uart *hu, unsigned int speed)
+ {
+-	if (hu->serdev)
+-		serdev_device_set_baudrate(hu->serdev, speed);
+-	else
++	struct qca_data *qca = hu->priv;
++	bool trace = atomic_read(&qca->startup_trace_left) > 0;
++	unsigned int reported;
++
++	if (trace)
++		bt_dev_info(hu->hdev, "QCA_STARTUP BAUD_BEGIN requested=%u", speed);
++	if (hu->serdev) {
++		reported = serdev_device_set_baudrate(hu->serdev, speed);
++		if (trace)
++			bt_dev_info(hu->hdev,
++				    "QCA_STARTUP BAUD_END requested=%u serdev_reported=%u",
++				    speed, reported);
++	} else {
+ 		hci_uart_set_baudrate(hu, speed);
++	}
+ }
+ 
+ static int qca_send_power_pulse(struct hci_uart *hu, bool on)
+@@ -1961,6 +1997,8 @@
+ 	bt_dev_info(hdev, "setting up %s", soc_name);
+ 
+ 	qca->memdump_state = QCA_MEMDUMP_IDLE;
++	atomic_set(&qca->startup_trace_left,
++		   qca_startup_trace && soc_type == QCA_QCA6390 ? 64 : 0);
+ 
+ retry:
+ 	ret = qca_power_on(hdev);
+@@ -2019,6 +2057,9 @@
+ 		if (ret)
+ 			goto out;
+ 	}
++
++	/* Stop raw logging before firmware download or user traffic begins. */
++	atomic_set(&qca->startup_trace_left, 0);
+ 
+ 	/* Setup patch / NVM configurations */
+ 	ret = qca_uart_setup(hdev, qca_baudrate, soc_type, ver,
+@@ -2062,6 +2103,7 @@
+ 			retries++;
+ 			goto retry;
+ 		}
++		atomic_set(&qca->startup_trace_left, 0);
+ 		return ret;
+ 	}
+ 
