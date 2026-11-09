@@ -188,7 +188,7 @@ bash src/build-bluetooth-trace.sh /var/tmp/np545xla-diag/linux-7.0 \
 原始证据位于 `output/bluetooth/startup-trace/after-cold/`、`ordered-samples/`、`after-cold-final/`、`fifo-compare/`、`oem-uart/`；其中包括源码、构建记录、完整内核片段、采样和菜单回读。上述 UART 变体和数字采样均为运行中实验，不冒充另一轮冷启动。
 
 
-## Windows 对照采集准备
+## Windows 对照采集
 
 `docs/dump/NP545XLA-BluetoothBaseline.ps1` 使用 Windows 自带 PnP、CIM、PnPUtil、注册表读取和公开蓝牙 API，读取当前机器的硬件 ID、UART 资源、实际服务与驱动文件摘要、设备参数、DSDT 及近期蓝牙日志。默认尝试两次 12.8 秒 BR/EDR inquiry，间隔 3 秒；`-SkipInquiry` 可只取静态信息。它不配对设备、不改驱动或注册表，也不切换蓝牙开关。没有 `-UploadUri` 时，所有报告只保存在 Windows 本机 `%LOCALAPPDATA%\NP545-Bluetooth\`。
 
@@ -198,4 +198,47 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\NP545XLA-BluetoothBase
 
 该 API 不发现仅支持 BLE 的设备；搜索结果同时记录记忆 / 配对状态和原始 last-seen 时间，不能把缓存中存在设备当成两次现场扫描成功。Windows 返回的 LMP / HCI 运行时版本也不等同于 Linux 在下载固件前请求的 `0xfc00` ROM 版本。[Windows inquiry API](https://learn.microsoft.com/en-us/windows/win32/api/bluetoothapis/nf-bluetoothapis-bluetoothfindfirstdevice) · [射频信息结构](https://learn.microsoft.com/en-us/windows/win32/api/bluetoothapis/ns-bluetoothapis-bluetooth_radio_info)
 
-PowerShell 语法解析、嵌入 C# 编译及 64 位原生结构大小检查均已通过。Windows 实机执行及标牌发现尚待验证。为交接 Windows，已在仍为 `0d8ebe70` 的 Debian 中校验 USB 和 EFI，将蓝牙单次标记从 0 设为 2，并发送正常重启；GRUB 应保存为 1 后停在菜单。用户可在菜单处关机并移除 Debian U 盘，再启动原 Windows。下一次插回 USB 开机会单次运行现有蓝牙诊断，此后默认仍是 Latest。该交接没有设置固件 BootNext；当前内核的 EFI 变量不可用。
+PowerShell 语法解析、嵌入 C# 编译及 64 位原生结构大小检查均已通过。随后在 Windows 真机执行，结果见下节。为交接 Windows，已在仍为 `0d8ebe70` 的 Debian 中校验 USB 和 EFI，将蓝牙单次标记从 0 设为 2，并发送正常重启；GRUB 应保存为 1 后停在菜单。用户可在菜单处关机并移除 Debian U 盘，再启动原 Windows。下一次插回 USB 开机会单次运行现有蓝牙诊断，此后默认仍是 Latest。该交接没有设置固件 BootNext；当前内核的 EFI 变量不可用。
+
+
+## Windows 原厂驱动实测与重启回 Linux（2026-11-09）
+
+用户确认已进入原 Windows，并授权通过临时局域网入口回传本轮硬件、驱动、ACPI 和蓝牙报告。采集运行于 Windows 11 ARM64，PowerShell `5.1.26100.9711`。未配对设备、替换驱动、修改注册表或固件启动项；回传完成后已关闭临时接收服务。原始报告、接收摘要和对照结果保存在忽略目录 `output/bluetooth/windows-baseline/`，不将机器私有报告纳入提交。
+
+### 本机驱动、资源及版本
+
+- 当前蓝牙传输设备为 `ACPI\VEN_QCOM&DEV_0471&SUBSYS_CLSC8180`，对应 `\_SB.BTH0`；UART 为 `ACPI\QCOM0418\12`，对应 `\_SB.UR18`，内存资源 `0x00C8C000–0x00C8FFFF`。二者及蓝牙 radio 的设备状态均为 OK、问题代码为 0。
+- 正在运行的 `QcBluetooth` 为 `1.0.1560.0000`，`qcuart` 为 `1.0.1600.0000`。两份 SYS 文件的 SHA-256 分别为 `b9d07c02b42e8bb1e0816a6325de41e76d9be9b72c6eaeed1e40dc2194b389be`、`804aed0f9dd97473933d258f22f65b09aefa1613abfc58a21ad137106a0ed7df`，与前述原厂包逐字节一致。
+- 本机蓝牙驱动类参数实际读到 `DefaultBaudRate=115200`、`BaudRate=3200000`、`ExplicitRtsWakeup=1`、`RadioGPIOControled=1`、`SWInBandSleepEnabled=1`。UART 的 Instance 18 配置为 `UartClass=2`、`EnableGsi=0`、`GpiiId=1`、`DeleteComPort=1`。注册表设定值不等同于测量过的电气时序或确认执行过某条驱动分支。
+- 当前 DSDT 为 394195 字节、校验和有效，SHA-256 `6164c3d674c97c03914aa8fb67257cacc8893f4954a6b6690049f4e7f3efc6e9`。与现有同型号参考表只有 5 个字节不同：表校验和，以及 `SOSN` 常量内的 4 个字节。其他字节完全相同，包括蓝牙、UART 和 GPIO 资源描述；没有发现需改换串口或 GPIO 编号的差异。
+- Windows radio API 成功返回 manufacturer `0x001d`、LMP subversion `0x380c`；PnP 属性另外报告 LMP / HCI version 均为 `0x0b`。这是 Windows 固件运行后的版本，不能当作 Linux 的下载前 `0xfc00` ROM 版本回复。
+
+### 两轮标牌发现
+
+第一次运行的两个 12.8 秒 inquiry 中，第一轮现场发现了目标标牌，第二轮没有返回该地址。因此没有将首次运行判为连续发现成功。随后保持标牌可发现，在同一次 Windows 启动中使用 `-InquiryOnly -InquiryTimeoutMultiplier 20` 复测，跳过重复硬件采集，每轮请求 25.6 秒 inquiry：
+
+| 复测轮次 | 单调计时耗时 | 同一目标地址 | 本机记录的 last-seen |
+|---|---:|---|---|
+| 1 | 25.633 秒 | 找到 | 13:11:47.940 |
+| 2 | 27.403 秒 | 找到 | 13:12:18.374 |
+
+两轮的错误码均为 0，同一目标的 `Remembered` 和 `Authenticated` 均为 false，last-seen 分别落在各自的新扫描窗口内。第二轮还有另一台同名标牌，验收按地址交集核对，未仅凭名字合并。两轮连续发现通过；未做配对或音频传输验证。Windows 与 Mac 的墙钟存在偏差，上表只比较同一 Windows 内的时间，不跨机器计算延迟。
+
+两份 ZIP 摘要分别为 `8927605094846af53e26dc9446dab95594c6809b08d65be848bcf658d41370f2` 和 `699c564218cf42a0e416daca88fb4066868949d313c85e5b71a69edab89e65fd`。首次采集访问服务注册表某个受保护子树时失败，未生成 `service-parameters.json`；关键蓝牙参数已从当前驱动类 `Parameters` 读出。采集器现将服务参数读取限定为三个 Qualcomm 服务，避免遍历 `BTHPORT` 配对密钥，并增加独立扫描模式、扫描时长参数和单调计时。新增扫描模式已在真机完成上述复测；收窄后的完整注册表采集路径仅完成语法检查，未再在 Windows 重跑。
+
+### Windows 到 Linux 的对照
+
+用户插回原 Debian U 盘，在 Windows 选择“重新启动”。进入的实际启动 ID 为 `742a1eb1-9cf9-4283-bed0-f7f0fcad1b85`，命令行含 `np545.bluetooth=1`，仍从原 USB 根分区启动，低速单次查询与日志参数均为 `Y`，测试 DT 的 `max-speed` 仍为 3000000。本次是 Windows 到 Linux 的正常重启，不能计作新的冷启动。
+
+| 开机后时间 | 结果 |
+|---|---|
+| 19.724192 s | 115200 单次版本查询开始，CTS=1 |
+| 19.724963 s | 发送 `01 00 fc 01 19` |
+| 19.726952 s | 收到 `00 40 fc 01 19`，随后 H4 `-84` |
+| 21.728269 s | 查询返回 `-110`，CTS 仍为 1 |
+
+Windows 可正常通信和扫描，没有使本轮 Linux 低速握手恢复。未读到有效 ROM 版本，也未进入 Linux 标牌扫描。当前证据支持继续核对 Linux 与原厂的初始化、流控和引脚状态切换；还不能指定某一处时序为根因。
+
+查询后经 `wlp1s0` 实际下载 138612 字节 Debian Release，摘要仍为 `ed56aac47e7911e65ee63aae8d67e29f20e023f840e49f8ed037043a33de138a`。仍使用内置 UART 驱动，临时 FIFO / DMA 模块未加载，LightDM 和 GPIO101 续充服务活动。回读 USB EFI 与原冷启动菜单一致，八个单次标记均为 0，默认 Latest 保留。记录在 `output/bluetooth/startup-trace/after-windows-complete/` 和对应启动历史目录。另保留首次取证因设备树路径写错而提前退出的 `after-windows/`；该错误不涉及硬件写入，随后在同次启动完成采集。
+
+随后正常重启进入默认 Latest，实际启动 ID 为 `a6c85b80-7f0c-4941-95c3-63f232c36a69`，同一 USB 根分区，命令行不含 `np545.bluetooth=1`，蓝牙测试服务 inactive。LightDM 与 GPIO101 续充服务 active；该默认启动再次经 Wi-Fi 完成同一文件下载，大小和摘要与测试项一致。独立诊断副本及有容量限制的启动日志暂保留，供后续初始化对照；未改变默认入口。

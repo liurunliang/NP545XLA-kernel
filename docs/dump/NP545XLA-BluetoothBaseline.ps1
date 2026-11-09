@@ -4,10 +4,13 @@
 param(
     [string]$KnownName = '[Signage] Samsung QMR Series',
     [string]$UploadUri = '',
-    [switch]$SkipInquiry
+    [switch]$SkipInquiry,
+    [switch]$InquiryOnly,
+    [ValidateRange(1,48)][byte]$InquiryTimeoutMultiplier = 10
 )
 $ErrorActionPreference = 'Stop'
 $runStarted = Get-Date
+if ($SkipInquiry -and $InquiryOnly) { throw 'Choose either SkipInquiry or InquiryOnly.' }
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Run this collector on Windows.' }
 $outDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('NP545-Bluetooth\' + $runStarted.ToUniversalTime().ToString('yyyyMMdd-HHmmss-fff'))
 New-Item -ItemType Directory -Path $outDir | Out-Null
@@ -20,7 +23,8 @@ function Save-Result([string]$Name, [scriptblock]$Read) {
         Write-Host ($Name + ': ' + $_.Exception.Message) -ForegroundColor Yellow
     }
 }
-Write-Host 'Reading local Bluetooth, UART and driver information...'
+if ($InquiryOnly) { Write-Host 'Reading local Bluetooth radio information...' }
+else { Write-Host 'Reading local Bluetooth, UART and driver information...' }
 Save-Result 'system' {
     [ordered]@{
         StartedUtc=$runStarted.ToUniversalTime().ToString('o')
@@ -31,95 +35,100 @@ Save-Result 'system' {
         Computer=(Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,SystemType)
         BIOS=(Get-CimInstance Win32_BIOS | Select-Object Manufacturer,SMBIOSBIOSVersion,ReleaseDate)
         KnownDevice=$KnownName
+        InquiryOnly=[bool]$InquiryOnly
+        InquiryTimeoutMultiplier=$InquiryTimeoutMultiplier
         InquiryNote='BR/EDR inquiry API only; does not discover BLE-only devices. Cached matches are not automatically accepted as live observations. Inspect last-seen fields and compare both rounds.'
         VersionNote='Windows LMP/HCI runtime versions are not the pre-firmware FC00 boot-ROM reply requested by Linux.'
     }
 }
-$devices = @()
-Save-Result 'devices' {
-    $script:devices = @(Get-PnpDevice -PresentOnly | Where-Object {
-        $_.InstanceId -match '^ACPI\\QCOM(0471|0418|0403)' -or
-        ($_.Class -eq 'Bluetooth' -and $_.InstanceId -notmatch '^(BTHENUM|BTHLEDEVICE)\\')
-    })
-    $devices | Select-Object Status,Class,FriendlyName,InstanceId,Problem,ConfigManagerErrorCode
-}
-$deviceProperties = @()
-foreach ($device in $devices) {
-    try {
-        $props = @(Get-PnpDeviceProperty -InstanceId $device.InstanceId | Select-Object KeyName,Type,Data)
-        $deviceProperties += [ordered]@{InstanceId=$device.InstanceId; Properties=$props}
-    } catch {
-        ($device.InstanceId + ': ' + $_) | Add-Content -LiteralPath (Join-Path $outDir 'errors.txt') -Encoding UTF8
+if (-not $InquiryOnly) {
+    $devices = @()
+    Save-Result 'devices' {
+        $script:devices = @(Get-PnpDevice -PresentOnly | Where-Object {
+            $_.InstanceId -match '^ACPI\\QCOM(0471|0418|0403)' -or
+            ($_.Class -eq 'Bluetooth' -and $_.InstanceId -notmatch '^(BTHENUM|BTHLEDEVICE)\\')
+        })
+        $devices | Select-Object Status,Class,FriendlyName,InstanceId,Problem,ConfigManagerErrorCode
     }
-}
-Save-Result 'device-properties' { $deviceProperties }
-Save-Result 'signed-drivers' {
-    Get-CimInstance Win32_PnPSignedDriver | Where-Object { $devices.InstanceId -contains $_.DeviceID } |
-        Select-Object DeviceID,DeviceName,DriverVersion,DriverDate,DriverProviderName,InfName,IsSigned,Manufacturer
-}
-$ordinal=0
-foreach ($device in $devices) {
-    $ordinal++
-    try {
-        $text = & pnputil.exe /enum-devices /instanceid $device.InstanceId /properties /resources /drivers 2>&1
-        ('Instance: ' + $device.InstanceId),('Exit: ' + $LASTEXITCODE),$text |
-            Out-File -LiteralPath (Join-Path $outDir ('resources-' + $ordinal + '.txt')) -Encoding UTF8
-    } catch {
-        $_ | Out-String | Out-File -LiteralPath (Join-Path $outDir ('resources-' + $ordinal + '.txt')) -Encoding UTF8
-    }
-}
-$serviceNames = @('QcBluetooth','qcuart','qcgpio','bthport')
-foreach ($entry in $deviceProperties) {
-    $serviceNames += @($entry.Properties | Where-Object {$_.KeyName -eq 'DEVPKEY_Device_Service'} | ForEach-Object {$_.Data})
-}
-$serviceNames = @($serviceNames | Where-Object {$_} | Sort-Object -Unique)
-Save-Result 'device-settings' {
+    $deviceProperties = @()
     foreach ($device in $devices) {
-        $enumKey='HKLM:\SYSTEM\CurrentControlSet\Enum\' + $device.InstanceId
-        $keys=@(($enumKey+'\Parameters'),($enumKey+'\Device Parameters'),($enumKey+'\Instance'))
-        $driverKey=(Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Driver' -ErrorAction SilentlyContinue).Data
-        if ($driverKey) { $keys += 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\' + $driverKey + '\Parameters' }
-        foreach ($key in $keys) {
+        try {
+            $props = @(Get-PnpDeviceProperty -InstanceId $device.InstanceId | Select-Object KeyName,Type,Data)
+            $deviceProperties += [ordered]@{InstanceId=$device.InstanceId; Properties=$props}
+        } catch {
+            ($device.InstanceId + ': ' + $_) | Add-Content -LiteralPath (Join-Path $outDir 'errors.txt') -Encoding UTF8
+        }
+    }
+    Save-Result 'device-properties' { $deviceProperties }
+    Save-Result 'signed-drivers' {
+        Get-CimInstance Win32_PnPSignedDriver | Where-Object { $devices.InstanceId -contains $_.DeviceID } |
+            Select-Object DeviceID,DeviceName,DriverVersion,DriverDate,DriverProviderName,InfName,IsSigned,Manufacturer
+    }
+    $ordinal=0
+    foreach ($device in $devices) {
+        $ordinal++
+        try {
+            $text = & pnputil.exe /enum-devices /instanceid $device.InstanceId /properties /resources /drivers 2>&1
+            ('Instance: ' + $device.InstanceId),('Exit: ' + $LASTEXITCODE),$text |
+                Out-File -LiteralPath (Join-Path $outDir ('resources-' + $ordinal + '.txt')) -Encoding UTF8
+        } catch {
+            $_ | Out-String | Out-File -LiteralPath (Join-Path $outDir ('resources-' + $ordinal + '.txt')) -Encoding UTF8
+        }
+    }
+    $serviceNames = @('QcBluetooth','qcuart','qcgpio','bthport')
+    foreach ($entry in $deviceProperties) {
+        $serviceNames += @($entry.Properties | Where-Object {$_.KeyName -eq 'DEVPKEY_Device_Service'} | ForEach-Object {$_.Data})
+    }
+    $serviceNames = @($serviceNames | Where-Object {$_} | Sort-Object -Unique)
+    Save-Result 'device-settings' {
+        foreach ($device in $devices) {
+            $enumKey='HKLM:\SYSTEM\CurrentControlSet\Enum\' + $device.InstanceId
+            $keys=@(($enumKey+'\Parameters'),($enumKey+'\Device Parameters'),($enumKey+'\Instance'))
+            $driverKey=(Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Driver' -ErrorAction SilentlyContinue).Data
+            if ($driverKey) { $keys += 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\' + $driverKey + '\Parameters' }
+            foreach ($key in $keys) {
+                if (Test-Path -LiteralPath $key) {
+                    [ordered]@{InstanceId=$device.InstanceId;Key=$key;Values=(Get-ItemProperty -LiteralPath $key | Select-Object * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider)}
+                    Get-ChildItem -LiteralPath $key -Recurse | Select-Object -First 32 | ForEach-Object {
+                        [ordered]@{InstanceId=$device.InstanceId;Key=$_.Name;Values=(Get-ItemProperty -LiteralPath $_.PSPath | Select-Object * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider)}
+                    }
+                }
+            }
+        }
+    }
+    Save-Result 'service-parameters' {
+        # Limit registry reads to vendor services; never traverse BTHPORT pairing keys.
+        foreach ($serviceName in @('QcBluetooth','qcuart','qcgpio')) {
+            $key='HKLM:\SYSTEM\CurrentControlSet\Services\' + $serviceName
             if (Test-Path -LiteralPath $key) {
-                [ordered]@{InstanceId=$device.InstanceId;Key=$key;Values=(Get-ItemProperty -LiteralPath $key | Select-Object * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider)}
-                Get-ChildItem -LiteralPath $key -Recurse | Select-Object -First 32 | ForEach-Object {
-                    [ordered]@{InstanceId=$device.InstanceId;Key=$_.Name;Values=(Get-ItemProperty -LiteralPath $_.PSPath | Select-Object * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider)}
+                $service=Get-ItemProperty -LiteralPath $key
+                $items=@()
+                $parameters=Join-Path $key 'Parameters'
+                if (Test-Path -LiteralPath $parameters) {
+                    $items += Get-ItemProperty -LiteralPath $parameters | Select-Object * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider
+                    $items += Get-ChildItem -LiteralPath $parameters -Recurse | Select-Object -First 64 | ForEach-Object {
+                        [ordered]@{Key=$_.Name; Values=(Get-ItemProperty -LiteralPath $_.PSPath | Select-Object * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider)}
+                    }
                 }
+                [ordered]@{Service=$serviceName;ImagePath=$service.ImagePath;Parameters=$items}
             }
         }
     }
-}
-Save-Result 'service-parameters' {
-    foreach ($serviceName in $serviceNames) {
-        $key='HKLM:\SYSTEM\CurrentControlSet\Services\' + $serviceName
-        if (Test-Path -LiteralPath $key) {
-            $service=Get-ItemProperty -LiteralPath $key
-            $items=@()
-            $parameters=Join-Path $key 'Parameters'
-            if (Test-Path -LiteralPath $parameters) {
-                $items += Get-ItemProperty -LiteralPath $parameters | Select-Object * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider
-                $items += Get-ChildItem -LiteralPath $parameters -Recurse | Select-Object -First 64 | ForEach-Object {
-                    [ordered]@{Key=$_.Name; Values=(Get-ItemProperty -LiteralPath $_.PSPath | Select-Object * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider)}
-                }
+    Save-Result 'driver-files' {
+        Get-CimInstance Win32_SystemDriver | Where-Object {$serviceNames -contains $_.Name} | ForEach-Object {
+            $path=$_.PathName.Trim('"')
+            if ($path.StartsWith('\SystemRoot\',[StringComparison]::OrdinalIgnoreCase)) { $path=$env:windir + $path.Substring(11) }
+            if ($path.StartsWith('\??\')) { $path=$path.Substring(4) }
+            $hash=$null; $version=$null
+            if (Test-Path -LiteralPath $path) {
+                $hash=(Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
+                $version=(Get-Item -LiteralPath $path).VersionInfo.FileVersion
             }
-            [ordered]@{Service=$serviceName;ImagePath=$service.ImagePath;Parameters=$items}
+            [ordered]@{Service=$_.Name;State=$_.State;Path=$path;FileVersion=$version;SHA256=$hash}
         }
     }
+    Save-Result 'radio-services' { Get-Service bthserv -ErrorAction SilentlyContinue | Select-Object Name,Status }
 }
-Save-Result 'driver-files' {
-    Get-CimInstance Win32_SystemDriver | Where-Object {$serviceNames -contains $_.Name} | ForEach-Object {
-        $path=$_.PathName.Trim('"')
-        if ($path.StartsWith('\SystemRoot\',[StringComparison]::OrdinalIgnoreCase)) { $path=$env:windir + $path.Substring(11) }
-        if ($path.StartsWith('\??\')) { $path=$path.Substring(4) }
-        $hash=$null; $version=$null
-        if (Test-Path -LiteralPath $path) {
-            $hash=(Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
-            $version=(Get-Item -LiteralPath $path).VersionInfo.FileVersion
-        }
-        [ordered]@{Service=$_.Name;State=$_.State;Path=$path;FileVersion=$version;SHA256=$hash}
-    }
-}
-Save-Result 'radio-services' { Get-Service bthserv -ErrorAction SilentlyContinue | Select-Object Name,Status }
 $nativeSource = @'
 using System;
 using System.Collections.Generic;
@@ -165,7 +174,8 @@ public static class NP545BluetoothBaseline {
         public bool Connected, Remembered, Authenticated;
     }
     public class Round {
-        public int Number, Error, EnumeratedCount;
+        public int Number, Error, EnumeratedCount, TimeoutMultiplier;
+        public long ElapsedMilliseconds;
         public string StartUtc, StartLocal, EndUtc;
         public List<Match> Matches = new List<Match>();
     }
@@ -192,8 +202,10 @@ public static class NP545BluetoothBaseline {
             Marshal.SizeOf(typeof(DeviceInfo))!=560 || Marshal.SizeOf(typeof(SearchParams))!=40)
             throw new InvalidOperationException("Unexpected native structure layout; run 64-bit Windows PowerShell.");
     }
-    public static List<RadioResult> Scan(string knownName) {
-        CheckLayouts(); var result=new List<RadioResult>();
+    public static List<RadioResult> Scan(string knownName, byte timeoutMultiplier) {
+        CheckLayouts();
+        if (timeoutMultiplier<1 || timeoutMultiplier>48) throw new ArgumentOutOfRangeException("timeoutMultiplier");
+        var result=new List<RadioResult>();
         var p=new RadioFindParams { Size=(uint)Marshal.SizeOf(typeof(RadioFindParams)) };
         IntPtr radio; IntPtr find=BluetoothFindFirstRadio(ref p,out radio);
         if (find==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(),"No local Bluetooth radio was enumerated");
@@ -205,10 +217,11 @@ public static class NP545BluetoothBaseline {
                     item.Name=info.Name; item.Address=AddressText(info.Address);
                     item.LmpSubversion=info.LmpSubversion; item.Manufacturer=info.Manufacturer;
                     for (int round=1;round<=2;round++) {
-                        var r=new Round { Number=round,StartUtc=DateTime.UtcNow.ToString("o"),StartLocal=DateTime.Now.ToString("o") };
+                        var r=new Round { Number=round,TimeoutMultiplier=timeoutMultiplier,StartUtc=DateTime.UtcNow.ToString("o"),StartLocal=DateTime.Now.ToString("o") };
+                        var timer=System.Diagnostics.Stopwatch.StartNew();
                         var search=new SearchParams { Size=(uint)Marshal.SizeOf(typeof(SearchParams)),
                             ReturnAuthenticated=true,ReturnRemembered=true,ReturnUnknown=true,ReturnConnected=true,
-                            IssueInquiry=true,TimeoutMultiplier=10,Radio=radio };
+                            IssueInquiry=true,TimeoutMultiplier=timeoutMultiplier,Radio=radio };
                         var device=new DeviceInfo { Size=(uint)Marshal.SizeOf(typeof(DeviceInfo)) };
                         IntPtr devices=BluetoothFindFirstDevice(ref search,ref device);
                         if (devices==IntPtr.Zero) r.Error=Marshal.GetLastWin32Error();
@@ -225,7 +238,7 @@ public static class NP545BluetoothBaseline {
                                 int error=Marshal.GetLastWin32Error(); if (error!=259) r.Error=error;
                             } finally { BluetoothFindDeviceClose(devices); }
                         }
-                        r.EndUtc=DateTime.UtcNow.ToString("o"); item.Rounds.Add(r);
+                        r.EndUtc=DateTime.UtcNow.ToString("o"); r.ElapsedMilliseconds=timer.ElapsedMilliseconds; item.Rounds.Add(r);
                         if (round==1) Thread.Sleep(3000);
                     }
                     result.Add(item);
@@ -254,19 +267,23 @@ Save-Result 'native-layouts' {
     [NP545BluetoothBaseline]::CheckLayouts()
     'Validated 64-bit layouts: radio 520, device 560, search 40 bytes'
 }
-Save-Result 'firmware-table' {
-    $dsdt=Join-Path $outDir 'DSDT.dat'
-    [NP545BluetoothBaseline]::ReadDsdt($dsdt)
-    Get-FileHash -Algorithm SHA256 -LiteralPath $dsdt | Select-Object Algorithm,Hash
+if (-not $InquiryOnly) {
+    Save-Result 'firmware-table' {
+        $dsdt=Join-Path $outDir 'DSDT.dat'
+        [NP545BluetoothBaseline]::ReadDsdt($dsdt)
+        Get-FileHash -Algorithm SHA256 -LiteralPath $dsdt | Select-Object Algorithm,Hash
+    }
 }
 if (-not $SkipInquiry) {
     Write-Host ('Keep ' + $KnownName + ' discoverable. Running two Bluetooth inquiries...')
-    Save-Result 'bluetooth-inquiries' { [NP545BluetoothBaseline]::Scan($KnownName) }
+    Save-Result 'bluetooth-inquiries' { [NP545BluetoothBaseline]::Scan($KnownName,$InquiryTimeoutMultiplier) }
 }
-Save-Result 'recent-bluetooth-events' {
-    @(Get-WinEvent -FilterHashtable @{LogName='System';StartTime=$runStarted.AddMinutes(-15)} -MaxEvents 800 -ErrorAction SilentlyContinue |
-        Where-Object {$_.ProviderName -match 'Bluetooth|BTH|qcuart|qcbt'} |
-        Select-Object TimeCreated,ProviderName,Id,LevelDisplayName,Message)
+if (-not $InquiryOnly) {
+    Save-Result 'recent-bluetooth-events' {
+        @(Get-WinEvent -FilterHashtable @{LogName='System';StartTime=$runStarted.AddMinutes(-15)} -MaxEvents 800 -ErrorAction SilentlyContinue |
+            Where-Object {$_.ProviderName -match 'Bluetooth|BTH|qcuart|qcbt'} |
+            Select-Object TimeCreated,ProviderName,Id,LevelDisplayName,Message)
+    }
 }
 $archive=$outDir + '.zip'
 Compress-Archive -Path (Join-Path $outDir '*') -DestinationPath $archive
