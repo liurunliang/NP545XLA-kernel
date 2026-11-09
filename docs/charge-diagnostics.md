@@ -148,6 +148,25 @@ TI 手册第 9.4.1.2 节明确将满充或不适宜充电时的终止交给 host
 
 新增分析产物为 `emuec-wdf-methods.json`、`emuec-import-xrefs.json`、`emuec-power-excerpts.txt`、`emuec-power-constants.json`，均位于 `output/hardware-boundary/`。
 
+### 休眠、关机与厂商命令的边界
+
+进一步按参数类型追踪了电源回调，避免把数值相同的不同枚举混用：
+
+- D0Entry 在 `0x5e6c` 调用 `WdfDeviceGetSystemPowerAction`，`0x5e7c` 比较返回值 `3`，对应 `POWER_ACTION::PowerActionHibernate`。该分支设置恢复标志，跳过 `0x4faa0` 的 PoFx 注册，调用 `0x507f0` 更新上下文；已有 PoFx 句柄时再报告设备已上电。它描述恢复处理，不能证明休眠期间谁负责充电。WDF 对部分电源场景的返回值语义还存在版本差异，不能只凭这个比较反推实机睡眠类型。[系统电源动作 API](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdfdevice/nf-wdfdevice-wdfdevicegetsystempoweraction)
+- D0Exit 在 `0x621c` 比较的却是回调传入的 `WDF_POWER_DEVICE_STATE`：`4` 为 `WdfPowerDeviceD3`，`5` 才是 `WdfPowerDeviceD3Final`。这里的 `4` **不是**另一个枚举中的 `PowerActionShutdown`。D3 分支只额外向 `0x509a8` 传入清理标志；停止三个 timer、关闭 I/O target 是后续共同路径。已跟踪路径未发现专门针对 S4/S5 修改 BQ 看门狗的分支，但这不能排除其他驱动或固件介入。[设备电源枚举](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdfdevice/ne-wdfdevice-_wdf_power_device_state) · [系统电源枚举](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ne-wdm-power_action)
+
+原先发现的 Ship Mode 已追到明确的厂商命令路径，不能把它当作普通关机动作：
+
+1. 邮箱分派函数 `0x1c0f0` 从输入 byte 1 取命令，使用 `command - 0x80` 索引 `0x2b6a0` 的 128 项函数表。
+2. 命令 `0xe8` 对应表项 `0x2b9e0`，调用 `0x16150`（日志为 `SetShipmode command`）；`0x16180` 将上下文 `+0xdb` 置为 `0xa5`。
+3. D0Exit 只有检查到该标志，才在 `0x630c` 调用 `0x142d0`：先派发停充，再向电池请求 ManufacturerAccess `0x0010`，随后清除标志。这是驱动意图与请求路径；实际电池包是否接受并关断 FET、原厂软件何时发出该邮箱命令，均未验证。未执行该命令，也未穷举所有间接上下文写入。
+
+同一邮箱表还明确了原厂**电池寿命延长选项是主机策略**：命令 `0xe3` 指向 `0x16090`；模式切换到 `1` 时，将 `+0xce8` / `+0xce9` 分别设为 `80` / `75`。`checkBattStatus` 在驱动缓存/修正后的 SOC ≥ 80 时派发停充，等待状态在 SOC ≤ 75 且温度等条件允许时启动再充。该路径没有把“80% 上限”作为自主阈值写入充电芯片的证据，不能据此假定主机停工后上限仍会执行。后续 Windows 采样应记录当前电池保护选项，不因高电量时未充电就判为异常。
+
+S0 待机、S4 休眠、完整 S5 关机应分别取证。Windows 启用 Fast Startup 后，用户选择“关机”仍可能涉及保存内核休眠映像，不能直接当作完整 S5 样本。后续需要用实际系统电源事件区分，现有 Before/After 操作说明只覆盖手动 S0 待机。[Fast Startup 与休眠的区别](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/distinguishing-fast-startup-from-wake-from-hibernation)
+
+本节仍是静态证据。新增可复核记录为 `output/hardware-boundary/emuec-lowpower-mailbox-boundary.json` 和 `emuec-lowpower-mailbox-excerpts.txt`；已重新核对原厂二进制 SHA256 及上述两个函数表项，没有对真机发送厂商命令或改变电源状态。
+
 ### ACPI 与原 Windows 睡眠能力记录
 
 继续核查了仓库已有的原厂表和 Windows 枚举记录，未为此切换操作系统：
