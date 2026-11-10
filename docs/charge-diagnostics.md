@@ -339,11 +339,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\NP545XLA-PowerBaseline
 
 采集器现为 Before 增加 System 日志序号游标，After 按 `EventRecordID` 获取电源、启动和校时事件，并在电池样本保存 `GetTickCount64` 运行时间。缺少旧版游标、日志重置或超过 2000 条上限时会记录错误，不静默宣告覆盖完整。新增逻辑通过语法和 C# 编译检查；尝试在真机验证新查询时 SSH 两次超时，尚未完成新版整轮复测，本轮结论来自已补齐的原始事件。没有修改系统时钟、更新策略或睡眠配置。
 
-下一轮先确认系统校时稳定、更新后台活动结束，再按下节做清醒充电的 WPP 小样本，之后才将驱动日志与待机驻留对齐。若平台仍无法进入 DRIPS，应继续定位 cx 约束及 IC20 活动；不能跳过这一边界，直接把本轮结果解释为硬件自治充电。
+后续清醒充电的 WPP 小样本已完成，见下节。待机追踪前仍需确认系统校时及后台活动，再将驱动日志与待机驻留对齐。若平台仍无法进入 DRIPS，应继续定位 cx 约束及 IC20 活动；不能跳过这一边界，直接把本轮结果解释为硬件自治充电。
 
 ### 原厂 WPP 入口与后续运行时取证
 
-上述 EmuEC 样本包含可定向启用的 WPP 日志。以下参数来自 ARM64 反汇编，**尚未在 Windows 查询、启用或解析实际事件**：
+上述 EmuEC 样本包含可定向启用的 WPP 日志。以下参数来自 ARM64 反汇编，已于 2026-11-10 在同哈希的 Windows 驱动上完成两分钟清醒充电实测：
 
 | 项目 | 值与静态依据 |
 | --- | --- |
@@ -353,13 +353,49 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\NP545XLA-PowerBaseline
 | 解码用的 message GUID / ID | `cb82acef-d6ce-3c92-28fd-52039420aa94` / `15`；GUID 位于 `0x2bc20`，不是启用 provider 所用的 GUID |
 | 正文 | `0x2120c` 经 `WmiTraceMessage` 传入两个以 NUL 结尾的 ANSI 字符串：`EmuEC` 和已由 `_vsnprintf` 格式化的正文；正文最多 511 字节 |
 
-定位记录保存在 `output/hardware-boundary/emuec-wpp-boundary.json`、`emuec-wpp-excerpts.txt` 和 `emuec-import-addresses.json`。由于正文已格式化，有望在缺少私有 PDB 时解码这一类消息，但必须用实际 ETL 验证。不能把 control GUID 当作 TMF 文件名，也不能因为通用工具暂时没有显示文本，就判断驱动没有执行。微软说明 TMF 按 message GUID 匹配，其内部格式可能随版本变化。[TMF 格式说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/trace-message-format-file)
+定位记录保存在 `output/hardware-boundary/emuec-wpp-boundary.json`、`emuec-wpp-excerpts.txt` 和 `emuec-import-addresses.json`。本轮已经在缺少私有 PDB 时按已核对的格式解码实际 ETL。不能把 control GUID 当作 TMF 文件名，也不能因为通用工具暂时没有显示文本，就判断驱动没有执行。微软说明 TMF 按 message GUID 匹配，其内部格式可能随版本变化。[TMF 格式说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/trace-message-format-file)
+
+#### 清醒充电 WPP 实测（2026-11-10）
+
+**Windows 主机侧 EmuEC 确实持续监测电池，并约每 30 秒向充电器提交电流、电压写请求，返回状态均为成功。** 这次采集主动保持清醒，是解码和调用链的正对照，不是睡眠充电验证。
+
+设备仍为 `NP545XLA-KA1TT`、Windows 11 ARM64 build 26200，EmuEC 服务 Running，磁盘映像 SHA256 为 `70de2be234da9d34125b4409f1272f8e74b2a7f1f1c651f9f09548823cb58bb9`。采集期间线程临时申请系统和显示器保持清醒，结束后恢复此前状态；没有修改电源方案、充电参数或驱动，也没有启停已有 WPR/OEM 会话。
+
+| 观测 | 实测结果与范围 |
+| --- | --- |
+| 采集窗口 | UTC `03:31:40.032062` 至 `03:33:40.594703`，约 120.56 s；原始 ETL 15,138,816 字节 |
+| Provider 启用 | `EnumerateTraceGuidsEx` 查询到 3 个注册实例；采集前均未启用，期间 LoggerId 58、level 5、MatchAnyKeyword `0x200`，结束后均恢复未启用 |
+| 完整性 | 3,703 个事件，238,894 字节 payload；会话与离线消费者报告的事件 / 缓冲区丢失计数均为 0；ProcessTrace / CloseTrace 返回 0 |
+| 主维护循环 | 119 条 `RefreshCharger::mainBattChg`，间隔中位数 1.00748 s，最大 1.06724 s；本轮状态始终为 `mainBattChg=0x11, setCharge=1, CHARGER_FLAG=9` |
+| 新电池读取 | 17 条读取成功分支的 `BatteryPolling::cmd`，每约 7.06 s 轮换温度、SOC、电压、循环数、状态、电流；同一字段约 42.3–42.5 s 更新一次。大量 `GetBattData` 是缓存访问，未计入新读取 |
+| 写请求 | 4 组 `0x14 / 0x15`，同一寄存器间隔约 30.23–30.35 s；8 次返回 NTSTATUS 均为 0，请求数据长度均为 2 |
+| 目标与实际值 | `0x14` 请求原始值 3830（`0x0ef6`），`0x15` 请求 8760（`0x2238`）；SBS 电池电流两次为 +2529 / +2530 mA，电压 8636–8642 mV，温度约 34.25–34.55 °C |
+| 容量 | 系统电池状态由 33,506 增至 33,914 mWh，约 82% → 83%；两端均报告 AC、充电中、未放电。这仍是 Windows 遥测 |
+
+写入证据来自 message GUID `245af9f0-4406-34ac-f755-f0b0bd0e4b58`、ID `12`，不能与 `RefreshCharger` 入口混为一谈。该事件是四个小端 uint32：寄存器、请求原始值、返回 NTSTATUS、请求数据长度。反汇编链为：`0x17ac8` 写助手 → `0x7908` 构造命令字节与两字节数据 → `0x7a38` 调用 WDF 表项 184（`WdfIoTargetSendWriteSynchronously`）→ 返回值保存至 `w19` → `0x17b58` 经 `0xc128` 发出事件。WDF 方法返回请求完成状态，因此比目标值日志更强；**仍不是外部总线捕获或芯片寄存器读回**，事件中的长度 2 也不是实际 BytesWritten。[WDF 同步写的返回值](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdfiotarget/nf-wdfiotarget-wdfiotargetsendwritesynchronously)
+
+`0x14` 的低 6 位在 BQ25710 中不参与电流设定；按 10 mΩ 采样电阻解释，原始 3830 对应 3776 mA 的设定码，不能说实际正在以 3830 mA 充电。`0x15` 的电压分辨率按手册 §9.6.4 为 8 mV。另外，119 条 ID `11` 读日志均为寄存器 `0x3f`、值 `0x3c00`：这是 IIN_HOST（按 10 mΩ 解释为 3000 mA 输入限流），**不是** `0x12` 中的看门狗配置；该消息第三个字段只是重复读值，不是 NTSTATUS。本轮没有据此宣称读到了 Windows 当前看门狗设置，也没有把原厂目标应用到 Linux。[TI BQ25710 §9.6.1、§9.6.3–4、§9.6.6](https://www.ti.com/lit/ds/symlink/bq25710.pdf)
+
+本机 `logman query providers <GUID>` 返回未找到，但原生 `EnumerateTraceGuidsEx(TraceGuidQueryInfo)` 能查询注册和启用状态。实际采集使用系统自带 `logman create trace ... -ets -f bin -max 64 -ct perf -ft 00:00:01 -bs 64 -nb 4 16 -p '{28f88fb3-c7ec-4a0c-bf04-aaaa2e4dc7e0}' 0x200 5`，随后读回配置；没有要求安装 WDK。停止后独有会话查询为 4201（不存在），provider 启用计数为 0。`logman` 列表查询失败不能作为驱动没有 WPP 的证据。[原生查询接口](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-enumeratetraceguidsex) · [logman 参数](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/logman-create-trace)
+
+原始记录与执行过的采集、导出脚本位于 `output/hardware-boundary/windows-wpp-20261110/`。ETL 在 `NP545-EmuEC-Awake-c17d0edd3fc0478b9c11f1ab3db175c5/emuec.etl`，SHA256 为 `73d8fd9d3067881747703284eacf5604063863dbfff49feb74a5540612c1568b`。最初导出器误将 WPP 短头判为错误，只导出 2 个事件；保留该失败记录，最终使用 `events-v2.tsv` 和 `decode-result-v2.json`，共 3,703 个事件。WPP 原始头可短于普通 EVENT_HEADER，但回调提供的 EVENT_RECORD 字段布局仍按 API 读取。
+
+[`dump/decode-emuec-wpp.py`](dump/decode-emuec-wpp.py) 可离线复核已导出的 TSV：验证分析样本哈希、已知消息格式和导出计数，分别保存正文、写返回、电池读取及间隔摘要；未知消息仍保留在原始 TSV 中，不猜测其含义。清醒样本已通过该脚本重算，结果与独立首轮解码一致。示例中的目录是原始采集目录，输出目录必须尚不存在：
+
+```sh
+python3 docs/dump/decode-emuec-wpp.py "$capture/events-v2.tsv" "$capture/decode-result-v2.json" \
+  --driver "$oem_sample/EmuEC.sys" --output "$capture/redecoded"
+```
+
+下一轮先去掉保持清醒请求，仅启用同一 WPP provider，配合 Before/After 电源事件和 SleepStudy 观察约 5 分钟手动睡眠。若能在明确的待机区间看到写返回，即可确认该区间仍有主机维护；若要证明最深低功耗下的执行 / 交接，还须结合驻留和设备 D-state，必要时追加 WPR Power。原有无追踪基线用于对照追踪带来的扰动。S4/S5、独立保护与异常恢复仍不在本轮验收范围内。
+
+#### 后续采集与验收方法
 
 取证分三步，每步使用新目录：
 
-1. 先完成上节**不启用追踪**的 20 分钟待机基线，保留容量与驻留报告。
-2. 确认 `emuec-service.json` 的服务状态与磁盘哈希，再在**清醒、正在充电**时做约两分钟 WPP 小样本，核对启用状态、日志正文及丢失计数。哈希不匹配时重新分析实际映像；没有有效小样本前，不用“睡眠日志为空”推论硬件接管。
-3. 小样本可用后，另做 WPP 与 WPR Power 同时记录的待机实验，将充电维护事件与平台驻留、设备 D-state 对齐。追踪可能改变待机行为，因此与第一步比较。短实验用于识别执行机制；若评价功耗趋势，微软建议至少一小时的 Modern Standby 记录。[WPR Power 与 WPA 分析方法](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/using-windows-performance-analyzer-to-analyze-modern-standby-issues)
+1. 无追踪待机基线已完成，原计划 20 分钟，实际约 39 分钟；容量增加，但 DRIPS 为 0。
+2. 清醒两分钟 WPP 正对照已完成，确认实际启用、解码和写返回。后续每轮继续核对服务状态与磁盘哈希；不匹配时重新分析映像。
+3. 待机 WPP 尚待执行，先结合电源事件和 SleepStudy；必要时另做 WPP 与 WPR Power 联合实验，对齐设备 D-state 与平台驻留。追踪可能改变待机行为，因此与第一步比较。短实验用于识别执行机制；若评价功耗趋势，微软建议至少一小时的 Modern Standby 记录。[WPR Power 与 WPA 分析方法](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/using-windows-performance-analyzer-to-analyze-modern-standby-issues)
 
 管理员 PowerShell 中先检查现有会话。以下命令假设已找到可运行的 WDK Tracelog；若不在 PATH，应使用经过确认的完整路径：
 
