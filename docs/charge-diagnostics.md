@@ -387,7 +387,7 @@ python3 docs/dump/decode-emuec-wpp.py "$capture/events-v2.tsv" "$capture/decode-
   --driver "$oem_sample/EmuEC.sys" --output "$capture/redecoded"
 ```
 
-后续已去掉保持清醒请求，在自动熄屏区间捕获到充电写返回；唤醒报告确认该轮未进入 Sleep 子阶段，见下节。若要证明睡眠时的执行 / 交接，仍须结合实际 Sleep、驻留和设备 D-state，必要时追加 WPR Power。原有无追踪基线用于对照，但两轮电源方案设置不同，不能将其差异全部归因于追踪。S4/S5、独立保护与异常恢复仍不在本轮验收范围内。
+后续已去掉保持清醒请求，分别在自动熄屏和手动 Sleep 中捕获到充电写返回，见下文两轮独立试验。手动 Sleep 仍未进入 DRIPS；若要证明最深低功耗时的执行 / 交接，还须结合驻留和设备 D-state，必要时追加 WPR Power。原有无追踪基线用于对照，但各轮电源方案设置须分别核对，不能将其差异全部归因于追踪。S4/S5、独立保护与异常恢复仍不在本轮验收范围内。
 
 #### 自动熄屏 WPP 实测（2026-11-10，已补齐唤醒报告）
 
@@ -417,7 +417,7 @@ python3 docs/dump/decode-emuec-wpp.py "$capture/events-v2.tsv" "$capture/decode-
 
 此前无追踪基线的 AC 自动睡眠为 300 s，本轮 Before 已为 0；尚未定位谁在两轮之间改变了设置，采集脚本没有电源方案写入。因而这两轮不是只差“是否开启 WPP”的严格对照。微软区分 Modern Standby 会话内的 Screen Off 与 Sleep，且 `STANDBYIDLE=0` 表示不因空闲自动睡眠；这些定义与本轮原始事件和设置相吻合。[状态定义](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/modern-standby-states) · [Sleep idle timeout](https://learn.microsoft.com/en-us/windows-hardware/customize/power-settings/sleep-settings-sleep-idle-timeout)
 
-本轮最终确认的是**熄屏时主机驱动继续管理充电**，没有验证 Sleep / DRIPS 下的维护或硬件交接，也不能推广到休眠、关机。保留初步 `standby-analysis-pre-wake.json`，另用 `analyze-standby-final.py` 根据最终事件与报告生成 `standby-analysis-final.json`、`standby-trial-sha256.json`；初步阶段推论以此处的最终状态边界为准。下一轮需明确执行手动睡眠，并在报告中确认进入 Sleep 后，再解释追踪中的驱动活动。
+本轮最终确认的是**熄屏时主机驱动继续管理充电**，没有验证 Sleep / DRIPS 下的维护或硬件交接，也不能推广到休眠、关机。保留初步 `standby-analysis-pre-wake.json`，另用 `analyze-standby-final.py` 根据最终事件与报告生成 `standby-analysis-final.json`、`standby-trial-sha256.json`；初步阶段推论以此处的最终状态边界为准。之后另做了明确手动睡眠的试验，结果见“手动 Sleep 充电维护”。
 
 另核对到一个追踪筛选边界：D0Exit 的 D3 分支日志（调用点 `0x6258`，message GUID `4217c437-b0a8-3311-ba92-50484b99ae48`、ID 53）使用 flag index 3，即 `0x4`；D0Entry 的休眠恢复分支 ID 47 也使用该标志。当前 `0x200` 采集不包含它们，因此不能根据缺少 D0 日志断定没有电源状态切换。这里仅为静态调用点映射，保存于 `d0-log-filter-boundary.json`，没有改动本轮正在运行的追踪条件。
 
@@ -438,13 +438,43 @@ python3 docs/dump/decode-emuec-wpp.py "$capture/events-v2.tsv" "$capture/decode-
 
 产物在 `output/hardware-boundary/windows-wpp-20261110/NP545-EmuEC-FullWait-120e050856434626ba6475131ef95fe3/`，ETL SHA256 为 `8ea4d040d3bc6b1460fe85ba218a3b7775b6d515bc65af144e04ed626f50c723`；解码、分析与摘要分别保存在 `decoded-fullwait/`、`fullwait-analysis.json`、`fullwait-sha256.json`。
 
+#### 手动 Sleep 充电维护（2026-11-10）
+
+**本轮已把原厂 EmuEC 的定时维护与 Windows 实际 Sleep 时段对齐：主机驱动在 Sleep 内继续轮询电池、刷新 BQ25710，电池容量增长。但软件 / 硬件 DRIPS 均为零，尚不能证明主机停止执行后有独立控制器接管充电。**
+
+为留出充电空间，先按操作者确认拔电，用只读观察进程从 100% 观察至约 95%；40 个样本全部为 AC 断开、负功率，19 分 31 秒后自动退出，临时保持清醒请求随之结束。插回原充电器 / 端口后恢复正功率。操作者暂停 Edge 播放，DISPLAY / 播放 EXECUTION 请求清除；三星 `SafiService` 的 `Disable Connected Standby` EXECUTION 请求仍在，本轮未停服务或覆盖请求。微软说明用户主动从开始菜单进入睡眠会终止这类电源请求；是否实际进入 Sleep 仍以退出事件和报告为准，不能仅凭请求名称判定。[PowerSetRequest](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-powersetrequest)
+
+试验目录为 `output/hardware-boundary/windows-wpp-20261110/20261110-054327-185/`。Before / After 的 Errors 为空，EmuEC 磁盘映像哈希仍匹配。Before 最后电池样本约 95%、+7,869 mW；追踪启动时再次核对 AC 在线、正在充电且正功率。此次启用 `0x204 / level 5`，在原充电标志 `0x200` 上增加 D0 分支的 `0x4`，并读回实际启用值。追踪不申请保持清醒、不设置唤醒定时器、不触发睡眠、不写充电参数。
+
+| 项目 | 本轮证据 |
+|---|---|
+| 手动 Sleep 边界 | 北京时间约 **13:45:47 → 14:03:04**。506 事件 6248 的 Reason 为 11；566 事件 6251 将 Session 36 的 Screen Off 转为 Session 37 的 Sleep；507 事件 6252 确认 `SleepEntered=true`，BootId 27 一致 |
+| 实际时长 | 原计划 5 分钟，退出事件的 `SleepDurationInUs` 为 **1,036.732 s，约 17 分 17 秒**。SleepStudy / SystemPowerReport 的 Sleep 段均为 1,041.732 s，恰多 5 s；保留该统计差异，不自行修正 |
+| 容量 | Sleep 开始 **39,226 mWh**、结束 **40,452 mWh**，满充容量 40,861 mWh，约 **96% → 99%，增加 1,226 mWh**；AC 保持在线 |
+| 进入 Sleep 后的前 300 秒 | 保留下来的事件中有 **263 次 RefreshCharger**、**18 次 BQ 写请求（9 对 0x14 / 0x15）**，全部返回 NTSTATUS 0；7 次新的 SBS Current 读取为 **+774、+746、+718、+691、+667、+643、+621 mA** |
+| 按用户确认计时的 300 秒 | UTC `05:46:04.396279 → 05:51:04.396279`，完全位于实际 Sleep 内；捕获 **262 次管理循环、16 次成功写返回**。该窗口与“进入 Sleep 后的前 300 秒”起点不同，不混用计数 |
+| 整个已捕获 Sleep 区间 | 至 UTC `06:01:29.860647`，约 **942.633 s**；有 **827 次管理循环、56 次成功写返回（28 对）**。20 次新的 Current 读取均为正，**+774 → +415 mA**；SBS SOC 96 → 99 |
+| 刷新内容 | 全部已解码 RefreshCharger 均为 `mainBattChg=0x11,setCharge=1,CHARGER_FLAG=9`；写请求为 0x14 原始值 3830、0x15 原始值 8760，PID 为 4。这是原厂行为记录，不是 Linux 参数建议 |
+| 深度低功耗 | 退出事件与两份报告的软件 / 硬件 DRIPS 均为 **0**；SleepStudy 的主要阻塞项为 `ARC has a vote for cx` 约 85%、UFS 约 11%、IC20 约 7% |
+| 电源方案与请求 | 前后 AC `STANDBYIDLE=0`、DC 180 s，未改变；SafiService 请求在前后快照均存在，Edge 播放请求均未出现。两个快照不能说明睡眠期间请求的全部变化 |
+
+从手动睡眠确认到物理唤醒确认之间没有 SSH / 网络轮询。WPP 仍在写磁盘，因此无法排除追踪对驻留和 UFS 活动的影响；阻塞项只能指出活动，不能据此认定 ARC 投票由充电任务产生，也不能归因于 SafiService。
+
+**本轮追踪有明确覆盖缺口。** 文件达到 128 MiB 上限，恢复连接时自己的会话已不存在。ETL 保留 28,787 个事件，原生导出成功，但 `HeaderBuffersLost=4`；不能称为零丢失，以上次数仅是已保留的观测。最后一个已解码文本事件比唤醒早约 **94.10 s**，未覆盖唤醒和最后一段 Sleep。即使包含 D0 标志，本轮没有保留下相关 message GUID 的事件，也不能结合有丢失的日志推断设备一直保持某个 D-state。会话查询返回 4201，provider 启用列表为空，已确认没有遗留本轮追踪。
+
+另保留两处数据边界：507 事件的 `NonDripsTimeActivatedInUs` 大于总时长，`NonResiliencyTimeInUs` 接近 uint64 回绕值，不用它们推算 CPU / 驻留时间；唤醒后的 Windows 汇总电池快照同时报告 Charging=0、Discharging=1 和正 SignedRate，不能据此宣称捕获了充满转换。本轮截止前的 SBS 状态仍为 `0x0080`，完整满充等待 / 再充转换仍需另验。
+
+硬件边界因此收敛为：**已实测的 Windows Sleep 充电仍有主机 EmuEC 执行参与；还没有证据允许 Linux 在冻结主机任务后假定充电维护会自动交接。** 下一优先级是区分 ARC / IC20 活动、充电任务和追踪开销，确认可达到的 DRIPS 与设备 D-state，再选择 Linux suspend 时停止充电或经过验证的维护 / 交接方案。S4、完整 S5 和独立保护仍分别待验。
+
+ETL SHA256 为 `397db9bd9b06a0f58d9c46cd62c930644df9d36e89db288d8d24aff93e2f425b`。已用现有离线解码器复核事件格式、计数和原厂映像哈希；`analyze-manual-sleep.py` 校验事件游标、会话关联、两份报告、策略、覆盖范围和清理状态，生成 `manual-sleep-analysis.json` 与 `manual-sleep-trial-sha256.json`；逐条记录在 `decoded-manual-sleep/`。这些产物均位于上述 `windows-wpp-20261110/` 根目录。
+
 #### 后续采集与验收方法
 
 取证分三步，每步使用新目录：
 
 1. 无追踪待机基线已完成，原计划 20 分钟，实际约 39 分钟；容量增加，但 DRIPS 为 0。
 2. 清醒两分钟 WPP 正对照已完成，确认实际启用、解码和写返回。后续每轮继续核对服务状态与磁盘哈希；不匹配时重新分析映像。
-3. 自动熄屏 WPP 已捕获主机写请求，最终报告确认整段未进入 Sleep。下一轮明确执行手动睡眠；必要时另做 WPP 与 WPR Power 联合实验，对齐设备 D-state 与平台驻留。追踪可能改变待机行为，电源方案变化也须控制。短实验用于识别执行机制；若评价功耗趋势，微软建议至少一小时的 Modern Standby 记录。[WPR Power 与 WPA 分析方法](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/using-windows-performance-analyzer-to-analyze-modern-standby-issues)
+3. 自动熄屏 WPP 与手动 Sleep WPP 均已完成；前者未进入 Sleep，后者确认 Sleep 内主机持续维护充电，但 DRIPS 仍为 0。后续必要时另做 WPP 与 WPR Power 联合实验，对齐设备 D-state 与平台驻留，并设计明确的采集时长与文件容量，防止等待物理操作时达到上限。追踪可能改变待机行为，电源方案变化也须控制。短实验用于识别执行机制；若评价功耗趋势，微软建议至少一小时的 Modern Standby 记录。[WPR Power 与 WPA 分析方法](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/using-windows-performance-analyzer-to-analyze-modern-standby-issues)
 
 管理员 PowerShell 中先检查现有会话。以下命令假设已找到可运行的 WDK Tracelog；若不在 PATH，应使用经过确认的完整路径：
 
