@@ -18,8 +18,45 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     throw 'Run in an Administrator PowerShell window so powercfg can generate reports.'
 }
 $computer = Get-CimInstance Win32_ComputerSystem
-if ($computer.Model -notmatch 'NP545XLA|545XLA') {
-    throw ('Unexpected model: ' + $computer.Model)
+$board = Get-CimInstance Win32_BaseBoard
+if ($computer.Manufacturer -notmatch '^SAMSUNG' -or
+    ($computer.Model -notmatch 'NP545XLA|545XLA' -and $board.Product -notmatch '^NP545XLA(?:-|$)')) {
+    throw ('Unexpected model/board: ' + $computer.Model + ' / ' + $board.Product)
+}
+
+# Qualcomm's miniclass driver may expose no root\wmi BatteryStatus instances.
+# Query the documented aggregate battery state as a separate telemetry source.
+if (-not ('NP545PowerBaseline.Native' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace NP545PowerBaseline {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BatteryState {
+        public byte AcOnLine, BatteryPresent, Charging, Discharging;
+        public byte Spare0, Spare1, Spare2, Tag;
+        public uint MaxCapacity, RemainingCapacity, Rate, EstimatedTime;
+        public uint DefaultAlert1, DefaultAlert2;
+        public int SignedRate { get { return unchecked((int)Rate); } }
+    }
+    public static class Native {
+        [DllImport("powrprof.dll", ExactSpelling=true)]
+        private static extern uint CallNtPowerInformation(
+            int level, IntPtr input, uint inputLength,
+            out BatteryState output, uint outputLength);
+        public static BatteryState ReadBattery() {
+            int size = Marshal.SizeOf(typeof(BatteryState));
+            if (size != 32) throw new InvalidOperationException("Unexpected battery structure size.");
+            BatteryState state;
+            // SystemBatteryState=5 is a query; no input or policy setter is used.
+            uint status = CallNtPowerInformation(5, IntPtr.Zero, 0, out state, (uint)size);
+            if (status != 0) throw new InvalidOperationException(
+                "SystemBatteryState NTSTATUS 0x" + status.ToString("X8"));
+            return state;
+        }
+    }
+}
+'@
 }
 $started = Get-Date
 $scriptFile = $PSCommandPath
@@ -52,13 +89,24 @@ function Save-Json([string]$Name, [scriptblock]$Read) {
 }
 
 function Save-Battery([string]$Name) {
+    Save-Json ($Name + '-system') {
+        $sampleTime = (Get-Date).ToUniversalTime().ToString('o')
+        $state = [NP545PowerBaseline.Native]::ReadBattery()
+        if ($state.BatteryPresent -eq 0) { throw 'SystemBatteryState reports no battery.' }
+        [ordered]@{
+            TimestampUtc=$sampleTime
+            Source='CallNtPowerInformation(SystemBatteryState=5)'
+            State=$state
+            Note='Windows aggregate battery telemetry; may be cached. Rate is raw DWORD; SignedRate is LONG in mW. Not direct SBS or charger registers.'
+        }
+    }
     Save-Json $Name {
         [ordered]@{
             TimestampUtc=(Get-Date).ToUniversalTime().ToString('o')
             Status=@(Get-CimInstance -Namespace root\wmi -ClassName BatteryStatus |
                 Select-Object InstanceName,Active,PowerOnline,Charging,Discharging,
                     Critical,Voltage,RemainingCapacity,Rate,ChargeRate,DischargeRate)
-            Note='Windows driver/WMI telemetry; may be cached. Raw values, not direct SBS or charger registers.'
+            Note='Windows driver/WMI telemetry; may be cached or contain no instances. See the separate system battery sample. Not direct SBS or charger registers.'
         }
     }
 }
@@ -102,6 +150,7 @@ Save-Json 'system' {
         Phase=$Phase
         StartedUtc=$started.ToUniversalTime().ToString('o')
         Computer=($computer | Select-Object Manufacturer,Model,SystemType)
+        Board=($board | Select-Object Manufacturer,Product,Version)
         OS=(Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber,LastBootUpTime)
         BIOS=(Get-CimInstance Win32_BIOS | Select-Object Manufacturer,SMBIOSBIOSVersion,ReleaseDate)
         ScriptSHA256=(Get-FileHash -Algorithm SHA256 -LiteralPath $scriptFile).Hash

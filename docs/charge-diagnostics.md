@@ -292,6 +292,8 @@ ChromiumOS EC 在固定提交 `08f5a1e6fc2c9467230444ac9b582dcf4d9f0068` 的 [`b
 
 [`dump/NP545XLA-PowerBaseline.ps1`](dump/NP545XLA-PowerBaseline.ps1) 只采集当前电池遥测、系统/相关驱动信息、睡眠能力、电源设置，以及 After 阶段的系统电源事件和 powercfg 报告。还会保存 EmuEC 服务状态、映像路径、磁盘文件 SHA256，以及 WPR/Tracelog/Tracefmt 的命令查找结果。脚本不切换系统、不触发睡眠、不启用追踪、不改设置、不访问原始 I²C，也不进行网络上传。报告写入 `%LOCALAPPDATA%\NP545-Power\<timestamp>`。磁盘文件哈希不等于已加载内存映像的校验；工具未出现在命令查找结果中也不等于未安装。
 
+Windows 的营销型号可能是 `Galaxy Book Go 5G`，脚本同时核对三星厂商和 `Win32_BaseBoard.Product` 中的 `NP545XLA` 板号。2026-11-10 实机返回 `NP545XLA-KA1TT`，但 `root\wmi` 的 `BatteryStatus`、`BatteryFullChargedCapacity` 均无实例。因此每次电池采样另存 `battery-first-system.json` / `battery-last-system.json`，使用 `CallNtPowerInformation(SystemBatteryState=5)` 的只读查询取得系统汇总状态、容量和功率。保留原始 DWORD `Rate` 及按 LONG 解释的 `SignedRate`，后者单位为 mW；这些仍是可能缓存的 Windows 遥测，不是原始 SBS 读取。原生结构校验为 32 字节，输入指针为空，不调用电源策略设置功能。[查询接口](https://learn.microsoft.com/en-us/windows/win32/api/powerbase/nf-powerbase-callntpowerinformation) · [状态结构与 Rate 符号](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-system_battery_state)
+
 首轮仅验证**原端口插电的 S0 待机**。应由操作者安排切换 Windows，以免中断其他 Linux 工作；电池有充电空间、确认正在充电时，在管理员 PowerShell 执行：
 
 ```powershell
@@ -308,10 +310,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\NP545XLA-PowerBaseline
 
 1. 当前 `/a` 是否仍支持 S0 Low Power Idle；驱动版本是否与反汇编样本一致。
 2. 睡眠报告是否记录目标时间段，Screen Off 与 Sleep/低功耗驻留是否成立；出现非零驻留并不等于整段持续深睡。
-3. `before/battery-last.json` 与 `after/battery-first.json` 的容量、电压、充放电状态，以及期间是否重启、是否改变电源来源。Windows WMI 是驱动遥测，可能缓存，不能当作直接 SBS 寄存器读取。
+3. `before/battery-last-system.json` 与 `after/battery-first-system.json` 的容量、充放电状态；WMI 有实例时再对照 `battery-last.json` / `battery-first.json` 的容量和电压。还应核对期间是否重启、是否改变电源来源。两种来源都是 Windows 遥测，可能缓存，不能当作直接 SBS 寄存器读取。
 4. **AC 会话的 SleepStudy 不记录能量变化**，因此不能用其中的 Charge 标记证明实际充电；需结合前后容量读数。即使容量增长，也只支持该测试区间的净充电，无法单独区分待机维护与唤醒附近的充电，更不能证明执行者身份。若需定位 EmuEC 活动，下一阶段再进行针对性 ETW/总线观测。[SleepStudy 限制](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/modern-standby-sleepstudy) · [powercfg 命令](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/powercfg-command-line-options)
 
-脚本已用官方 PowerShell 7.4.6 便携版完成语法解析；新增映像路径处理检查了 5 种正常形式和 3 种拒绝形式，文档中的 5 段 PowerShell 命令也已通过解析。此前已检查输出记录格式；Windows CIM/PnP/powercfg 和追踪工具尚未执行验收。验证记录在 `output/hardware-boundary/power-collector-validation.txt`。`complete.json` 只表示一次采集结束，须检查其中 Errors，不能当作验收通过标记。
+脚本已用官方 PowerShell 7.4.6 便携版完成语法解析；新增映像路径处理检查了 5 种正常形式和 3 种拒绝形式，文档中的 5 段 PowerShell 命令也已通过解析。2026-11-10 又验证了原生 C# 编译、32 字节结构布局和负功率转换，并在 Windows 11 ARM64 build 26200 完成 Before 真机采集，Errors 为空。待机前 EmuEC 服务为 Running，磁盘映像摘要与反汇编样本一致；系统报告外部电源接入、正在充电，最后一次汇总容量为 4903，功率为 +23457 mW。此时只完成了睡眠前检查，尚不能判定睡眠期间充电或低功耗驻留。两机墙钟存在偏差，后续应在 Windows 自身的事件时间线上对齐，不直接相减 Mac 与 Windows 时间。新增记录在 `output/hardware-boundary/windows-validation-20261110/`，此前检查在 `power-collector-validation.txt`。`complete.json` 只表示一次采集结束，须检查其中 Errors，不能当作验收通过标记。
 
 ### 原厂 WPP 入口与后续运行时取证
 
