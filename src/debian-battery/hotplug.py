@@ -10,7 +10,7 @@ import signal
 import sys
 import time
 
-from keepcharge import (Charger, FIRMWARE_MA, FIRMWARE_MV, StopCharge, log, pack, pack_target,
+from keepcharge import (Charger, FIRMWARE_MA, FIRMWARE_MV, FullCharge, StopCharge, log, pack, pack_target,
                         stopping, uptime)
 from np545_charge_observe import BATTERY, DT, Message, Registers, Transfer, port
 
@@ -206,7 +206,8 @@ def contract(voltage):
     return pd if pd.get("requested_mV") == voltage and pd.get("requested_mA") == 3000 else None
 
 
-def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0, voltage=FIRMWARE_MV):
+def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0, voltage=FIRMWARE_MV,
+                        on_full=None):
     # The startup policy can also take over the measured firmware-started
     # charge. All other callers still require a zero target after a replug.
     if voltage not in FIRMWARE_CHARGE or initial_current not in (0, FIRMWARE_CHARGE[voltage]):
@@ -217,7 +218,13 @@ def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0, volt
     charge_owned = False
     try:
         sink.check(known, 12000)
-        pack_target(pack(), starting=initial_current == 0)
+        initial_full = False
+        try:
+            pack_target(pack(), starting=initial_current == 0)
+        except FullCharge:
+            if on_full is None:
+                raise
+            initial_full = True
         chip.settings(initial_current, voltage=voltage)
         present = chip.input_present()
         enabled = sink.switches()
@@ -239,6 +246,13 @@ def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0, volt
         expected = initial_current
         last = None
         positive = False
+        if initial_full:
+            charge_owned = True
+            chip.set_current(0)
+            expected = 0
+            log("full-stop", readback_mA=0)
+            if not on_full():
+                return
         while not stopping.is_set():
             try:
                 if sink.check(known, 12000, allow_detach=True) is None:
@@ -255,11 +269,25 @@ def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0, volt
             now = uptime()
             if last is not None and now - last > 90:
                 raise StopCharge("refresh deadline missed")
+            try:
+                ma = pack_target(battery, starting=not positive)
+            except FullCharge:
+                if on_full is None:
+                    raise
+                # Keep the verified input path while the opt-in policy waits.
+                # Mark ownership before writing so failed readback also cleans up.
+                charge_owned = True
+                chip.set_current(0)
+                expected = 0
+                log("full-stop", readback_mA=0, **battery)
+                if not on_full():
+                    return
+                last, positive = None, False
+                continue  # fresh pack/PD/BQ checks before a nonzero target
             if not positive and last is not None:
                 positive = battery["current_now"] > 0
                 if not positive and now - began >= 10:
                     raise StopCharge("pack did not begin taking current")
-            ma = pack_target(battery, starting=not positive)
             if last is None or now-last >= 45 or expected != ma:
                 if stopping.is_set():
                     return

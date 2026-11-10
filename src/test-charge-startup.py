@@ -5,7 +5,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 src = Path(__file__).resolve().parent
 for name, path in (("np545_charge_observe", src / "probe-debian-charge.py"),
@@ -81,12 +81,12 @@ class StartupTests(unittest.TestCase):
         self.run_policy()
         self.events.next.assert_not_called()
         self.charge.assert_called_once_with(self.sink, self.chip, hp.profile(self.twelve),
-                                           wait=self.events.wait_charging, initial_current=3776, voltage=8760)
+                                       wait=self.events.wait_charging, initial_current=3776, voltage=8760, on_full=ANY)
 
     def test_boot_12v_zero_target_can_start_only_after_all_charge_checks(self):
         self.run_policy()
         self.charge.assert_called_once_with(self.sink, self.chip, hp.profile(self.twelve),
-                                           wait=self.events.wait_charging, initial_current=0, voltage=8760)
+                                       wait=self.events.wait_charging, initial_current=0, voltage=8760, on_full=ANY)
 
     def test_full_boot_at_5_or_12v_keeps_monitoring_without_changing_8400mv(self):
         for pd in (self.five, self.twelve):
@@ -127,7 +127,7 @@ class StartupTests(unittest.TestCase):
 
     def test_full_boot_then_real_detach_and_attach_can_charge(self):
         self.poll.side_effect = [self.five, self.twelve]
-        self.pack.side_effect = [self.full, self.full, self.hungry, self.hungry]
+        self.pack.side_effect = [self.full, self.full, self.full, self.hungry, self.hungry]
         self.events.next.side_effect = [self.event(detached=True), self.event()]
         self.run_policy()
         self.charge.assert_called_once()
@@ -332,7 +332,7 @@ class StartupTests(unittest.TestCase):
             self.run_policy()
         send.assert_not_called()
         self.charge.assert_called_once_with(self.sink, self.chip, hp.profile(self.twelve),
-                                           wait=self.events.wait_charging, initial_current=0, voltage=8696)
+                                       wait=self.events.wait_charging, initial_current=0, voltage=8696, on_full=ANY)
 
     def test_inactive_unplugged_firmware_target_is_cleared_before_negotiation(self):
         self.regs.update({0x14: 2880, 0x15: 8696, 0x20: 0, 0x3f: 0x0900, 0x22: 0x0900})
@@ -343,7 +343,7 @@ class StartupTests(unittest.TestCase):
         self.chip.set_current.assert_called_once_with(0)
         self.sink.select.assert_called_once_with(hp.profile(self.twelve))
         self.charge.assert_called_once_with(self.sink, self.chip, hp.profile(self.twelve),
-                                           wait=self.events.wait_charging, initial_current=0, voltage=8696)
+                                       wait=self.events.wait_charging, initial_current=0, voltage=8696, on_full=ANY)
 
     def test_observed_usb_input_limit_can_be_updated_with_current_zero(self):
         self.regs.update({0x15: 8696, 0x3f: 0x0900, 0x22: 0x0900})

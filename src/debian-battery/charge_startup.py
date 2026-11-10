@@ -2,14 +2,70 @@
 """Opt-in IC10 startup policy for the original 12 V / 3 A source."""
 from hotplug import (FIRMWARE_CHARGE, FIRMWARE_MV, StopCharge, charge_after_replug, is_detached, log,
                      pack, pack_target, poll_port, profile, stopping, uptime, wait_for)
+from keepcharge import full_status
+
+FULL_SAMPLE_SECONDS = 30
+RECHARGE_PERCENT = 95
 
 
 def full_idle(battery):
     # 0x40e0 is the measured full pack: initialized, full, discharging and
     # terminate-charge. Other alarms/errors must not become a normal idle state.
-    flags = battery["flags"]
-    return (flags & 0xa0 == 0xa0 and not flags & 0x9b0f
-            and battery["constant_charge_current_max"] == 0)
+    # The full flag takes precedence even if the pack still advertises a target.
+    # FullInput only accepts a zero BQ target; wait_full gates any later restart.
+    return full_status(battery)
+
+
+def wait_full(events, sink, chip, known, *, input_voltage, charge_voltage):
+    """Hold zero current; two fresh eligible samples are required for recharge.
+
+    Only the startup candidate calls this. Port IRQs and SIGTERM still interrupt
+    the wait immediately; timed samples also handle a pack change with no IRQ.
+    """
+    next_sample = uptime()
+    previous_sample = None
+    ready = 0
+    log("full-wait", recharge_percent=RECHARGE_PERCENT, sample_seconds=FULL_SAMPLE_SECONDS)
+    while not stopping.is_set():
+        now = uptime()
+        if now < next_sample:
+            if events.wait_charging(next_sample - now):
+                return False
+            continue
+        # Failure or a changed path never authorizes an automatic restart.
+        sink.check(known, input_voltage)
+        chip.settings(0, voltage=charge_voltage)
+        chip.check_limits()
+        if not chip.input_present() or not sink.switches():
+            raise StopCharge("full standby lost the verified input path")
+        battery = pack()
+        flags = battery["flags"]
+        full = full_status(battery)
+        if (not flags & 0x80 or flags & 0x9b0f
+                or (flags & 0x4000 and not full)):
+            raise StopCharge(f"pack fault during full standby: {flags:#06x}")
+        if (not 50 <= battery["temp"] <= 400 or not 0 <= battery["capacity"] <= 100
+                or not 6000000 <= battery["voltage_now"] <= FIRMWARE_MV * 1000
+                or not 0 <= battery["constant_charge_current_max"] <= 65534000
+                or (battery["constant_charge_voltage_max"] != 0
+                    and not FIRMWARE_MV * 1000 <= battery["constant_charge_voltage_max"] <= 8900000)):
+            raise StopCharge("invalid pack reading during full standby")
+        if previous_sample is None or now - previous_sample > 90:
+            ready = 0
+        eligible = (not full and battery["capacity"] <= RECHARGE_PERCENT
+                    and battery["constant_charge_current_max"] >= 64000)
+        if eligible:
+            pack_target(battery, starting=True)
+            ready += 1
+        else:
+            ready = 0
+        log("full-sample", eligible_samples=ready, readback_mA=0, **battery)
+        if ready >= 2 and not stopping.is_set():
+            log("recharge-ready", capacity=battery["capacity"])
+            return True
+        previous_sample = now
+        next_sample = uptime() + FULL_SAMPLE_SECONDS
+    return False
 
 
 def discharging_pack():
@@ -176,6 +232,9 @@ def _recover_startup(events, sink, chip, standby):
                 if standby.ready(known, voltage):
                     log("full-idle", pd=pd, charge_voltage_mV=chip.word(0x15), **battery)
                     armed, requested, deadline = False, False, None
+                    if wait_full(events, sink, chip, known, input_voltage=voltage,
+                                 charge_voltage=charge_voltage):
+                        initial, armed = True, True
                     continue
                 if stopping.is_set():
                     return
@@ -202,7 +261,9 @@ def _recover_startup(events, sink, chip, standby):
                     return
                 log("charge-ready", seq=events.seq, previous_mA=current, pd=pd)
                 charge_after_replug(sink, chip, known, wait=events.wait_charging,
-                                    initial_current=current, voltage=charge_voltage)
+                                    initial_current=current, voltage=charge_voltage,
+                                    on_full=lambda: wait_full(events, sink, chip, known,
+                                        input_voltage=12000, charge_voltage=charge_voltage))
                 armed, requested, deadline = False, False, None
                 continue
             if current:

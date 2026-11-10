@@ -26,6 +26,16 @@ class StopCharge(Exception):
     pass
 
 
+class FullCharge(StopCharge):
+    """A normal full-pack stop; legacy callers still stop as before."""
+
+
+def full_status(battery):
+    flags = battery["flags"]
+    # Initialized + full; termination and not-charging are allowed only here.
+    return flags & 0xa0 == 0xa0 and not flags & 0x9b0f
+
+
 class Charger(Registers):
     open_flags = os.O_RDWR
 
@@ -72,6 +82,8 @@ def pack_target(battery, *, starting=False):
     # SBS initialized, no alarms or error, neither full nor discharging.
     blocked = 0xdb2f if starting else 0xdb6f
     if not flags & 0x80 or flags & blocked:
+        if full_status(battery):
+            raise FullCharge(f"pack status {flags:#06x}")
         raise StopCharge(f"pack status {flags:#06x}")
     if not 50 <= battery["temp"] <= 400 or not 0 <= battery["capacity"] < 100:
         raise StopCharge("pack temperature or state of charge out of range")
