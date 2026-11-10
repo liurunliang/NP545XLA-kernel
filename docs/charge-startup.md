@@ -84,7 +84,17 @@ PID 1562 在启动时钟 200.042 秒进入 `full-wait`。到 400.052 秒独立�
 
 这轮通过的是**运行中启动候选，对已经有效的满电 5 V 输入持续保持等待**。没有验证输入失效后的恢复，也不能替代候选随系统启动、运行中充满、无端口事件的自动再充或睡眠恢复。微小负电流与本次容量未下降应同时保留，不能表述为所有时刻电池电流严格为零。
 
-证据位于 `output/full-cycle-20261110/device-evidence/`：`linux-preflight.json`、`baseline-backup.tar`、`install.txt`、`full-3min.json` 与 `full-3min-summary.json`。已准备同次启动的 `rollback.sh`，尚未执行。随后请求用户拔下充电器，准备降至约 95% 后再插回观察充满转换。
+证据位于 `output/full-cycle-20261110/device-evidence/`：`linux-preflight.json`、`baseline-backup.tar`、`install.txt`、`full-3min.json` 与 `full-3min-summary.json`。已准备同次启动的 `rollback.sh`，尚未执行。随后用户确认拔下充电器，进入下述放电验证。
+
+### 拔线等待及电池重新请求充电
+
+满电等待实际上持续至启动时钟 822.948 秒的实体拔线，累计约 622.906 秒，21 条满电检查正常；拔线前 124 个独立电池样本的容量均为 5282 mAh。823.115 秒记录实际负电流并进入等待接入，PID 1562 未退出。首次独立读取确认 IC10 不响应、实际电流 −957 mA、BQ 目标仍为 0 mA / 8400 mV。
+
+用户保持充电器拔出后，每 30 秒只读观察电量。观察进程通过临时 `systemd-inhibit` 阻止睡眠及 idle，达到 95% 自动结束，未修改持久电源策略。27 次样本覆盖 781.642 秒，容量读数 5282 → 5041 mAh，温度 27.9–28.5°C；服务始终为 PID 1562、active、零重启。自拔线边沿至目标样本共 868.230 秒。
+
+满电标志在 97% / 5099 mAh 时仍为 `0x40e0`，30 秒后的 96% / 5091 mAh 样本变为 `0x00c0`，同时 SBS 重新请求 5320 mA / 8860 mV。该请求只作为电池状态依据，不替代本机 1024 mA 上限。到 95% 时请求继续有效；随后提示用户插回原端口，准备验证重新接入和运行中充满转换。此轮拔线放电不能证明无 GPIO 事件的自动再充。
+
+本阶段证据为 `unplugged-first.json`、`detach-summary.json`、`discharge-watch.jsonl`、`discharge-summary.json` 和 `discharge-target.json`。
 
 ## 当前启动的真机初测（2026-11-09）
 
