@@ -72,7 +72,19 @@ src/build-debian-battery.sh /var/tmp/np545xla-diag/obj \
 
 ### 2026-11-10 候选交付状态
 
-实现提交为 `a633319`，仅显式 `--startup` 路径启用新循环。包内测试、构建日志、源码归档与逐文件 SHA256 保存在 `output/full-cycle-20261110/`；最终 ARM64 证据位于 `arm64/output/`。`source-final.tar.gz` 的 SHA256 为 `cac78a01af9ffed11aa104a33c03ca8218880f66da0493207ce496f5b6ba8f8b`。下列 2026-11-09 真机记录对应旧候选，不能作为本轮新增行为的实机验收。
+实现提交为 `a633319`，仅显式 `--startup` 路径启用新循环。包内测试、构建日志、源码归档与逐文件 SHA256 保存在 `output/full-cycle-20261110/`；最终 ARM64 证据位于 `arm64/output/`。`source-final.tar.gz` 的 SHA256 为 `cac78a01af9ffed11aa104a33c03ca8218880f66da0493207ce496f5b6ba8f8b`。下列 2026-11-09 真机记录对应旧候选，不能作为本轮新增行为的实机验收。2026-11-10 满电等待初测见下一节。
+
+## 满电 5 V 等待真机初测（2026-11-10）
+
+用户确认切回 Linux 后，从 Windows 正常重启进入原 U 盘，启动 ID 为 `999a1194-882f-4503-8804-b88c5fd77aaa`，根 UUID `aeb13805-ba45-4385-8a98-067b839ca579`、内核 `7.0.0` 和默认 Latest 命令行均与既有路径相符。原服务因等待 12 V 超时退出；此时原充电器实际为 5 V / 3 A，受电通路已经有效，电池 100%、SBS `0x40e0`，BQ 目标为 0 mA / 8400 mV。
+
+七个现场 Python 文件与旧候选逐一核对，五个回退 deb 的文件与现场一致后，保存原文件、服务配置和包版本，安装本轮五个控制包。仅通过 `/run/systemd/system/np545-gpiocharge.service.d/90-full-cycle-trial.conf` 启用 `--startup`。未更改 EFI、内核或默认启动项，已有只读电池模块未替换。安装后七个现场 Python 文件与本轮源码一致。
+
+PID 1562 在启动时钟 200.042 秒进入 `full-wait`。到 400.052 秒独立读取时，已等待 200.010 秒，7 条 `full-sample` 均正常，BQ 目标始终为 0，保留 8400 mV 和 5 V / 3 A 输入；有效输入与 consumer 在每次状态检查中复核。服务仍 active，`NRestarts=0`，等待位置 `do_select`。40 个独立电池样本覆盖 196.088 秒，首末容量均为 5282 mAh、100%，实际电流范围 −21～0 mA；末次独立读取为 −15 mA。
+
+这轮通过的是**运行中启动候选，对已经有效的满电 5 V 输入持续保持等待**。没有验证输入失效后的恢复，也不能替代候选随系统启动、运行中充满、无端口事件的自动再充或睡眠恢复。微小负电流与本次容量未下降应同时保留，不能表述为所有时刻电池电流严格为零。
+
+证据位于 `output/full-cycle-20261110/device-evidence/`：`linux-preflight.json`、`baseline-backup.tar`、`install.txt`、`full-3min.json` 与 `full-3min-summary.json`。已准备同次启动的 `rollback.sh`，尚未执行。随后请求用户拔下充电器，准备降至约 95% 后再插回观察充满转换。
 
 ## 当前启动的真机初测（2026-11-09）
 
