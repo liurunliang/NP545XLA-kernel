@@ -271,6 +271,8 @@ ChromiumOS EC 在固定提交 `08f5a1e6fc2c9467230444ac9b582dcf4d9f0068` 的 [`b
 
 原始日志：`output/hardware-boundary/live-mode-repeat-and-charge-history.txt`。本轮保留现场，未重启充电服务。
 
+2026-11-10 后续候选已针对该缺口实现“正常 Full → 电流清零并保留输入 → 等待 → 两次确认后再充”，ARM64 包内 68 项测试通过；新增行为尚待真机验收。阈值、保护边界和验收项目见 [充电启动策略](charge-startup.md)。上面的退出记录仍是旧候选的实测结果。
+
 ### 只读诊断实现与验证
 
 新增 `src/debian-battery/np545_battery_diag.c`，只在 `samsung,np545xla` 上找到指定 OF 节点、地址 `0x0b`、所有者 `np545-battery-ro` 后读取允许列表。它不注册新 I2C 驱动、不解绑现有驱动、不改变 client flags、不写寄存器。模块加载时采样一次，不创建后台任务；字符串由 `strings=1` 显式开启，使用标准 SBS 读取方式并检查长度。
