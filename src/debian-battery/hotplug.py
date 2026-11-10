@@ -207,7 +207,7 @@ def contract(voltage):
 
 
 def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0, voltage=FIRMWARE_MV,
-                        on_full=None):
+                        on_full=None, on_sleep=None):
     # The startup policy can also take over the measured firmware-started
     # charge. All other callers still require a zero target after a replug.
     if voltage not in FIRMWARE_CHARGE or initial_current not in (0, FIRMWARE_CHARGE[voltage]):
@@ -300,13 +300,17 @@ def charge_after_replug(sink, chip, known, wait=None, *, initial_current=0, volt
             if wait(1):
                 return
     finally:
+        clean_exit = sys.exc_info()[0] is None
+        keep_input = False
         try:
             if charge_owned:
                 chip.set_current(0)
                 log("stop", readback_mA=0)
+            if clean_exit and on_sleep is not None:
+                keep_input = on_sleep(known, 12000, voltage)
         finally:
             # Never send a switch command to a port which has changed roles.
-            pd = poll_port() if switch_owned else {}
+            pd = poll_port() if switch_owned and not keep_input else {}
             if pd.get("attached") and pd.get("pd_state") != 0 and not pd["source"]:
                 sink.consumer(False)
                 log("consumer-off")

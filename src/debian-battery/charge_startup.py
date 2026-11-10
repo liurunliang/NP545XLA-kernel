@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Opt-in IC10 startup policy for the original 12 V / 3 A source."""
+import sys
 from hotplug import (FIRMWARE_CHARGE, FIRMWARE_MV, StopCharge, charge_after_replug, is_detached, log,
                      pack, pack_target, poll_port, profile, stopping, uptime, wait_for)
 from keepcharge import full_status
@@ -14,6 +15,20 @@ def full_idle(battery):
     # The full flag takes precedence even if the pack still advertises a target.
     # FullInput only accepts a zero BQ target; wait_full gates any later restart.
     return full_status(battery)
+
+
+def check_idle_pack(battery):
+    """Validate zero-current standby without treating normal Full as a fault."""
+    flags = battery["flags"]
+    if (not flags & 0x80 or flags & 0x9b0f
+            or (flags & 0x4000 and not full_status(battery))):
+        raise StopCharge(f"pack fault during full standby: {flags:#06x}")
+    if (not 50 <= battery["temp"] <= 400 or not 0 <= battery["capacity"] <= 100
+            or not 6000000 <= battery["voltage_now"] <= FIRMWARE_MV * 1000
+            or not 0 <= battery["constant_charge_current_max"] <= 65534000
+            or (battery["constant_charge_voltage_max"] != 0
+                and not FIRMWARE_MV * 1000 <= battery["constant_charge_voltage_max"] <= 8900000)):
+        raise StopCharge("invalid pack reading during full standby")
 
 
 def wait_full(events, sink, chip, known, *, input_voltage, charge_voltage):
@@ -39,17 +54,8 @@ def wait_full(events, sink, chip, known, *, input_voltage, charge_voltage):
         if not chip.input_present() or not sink.switches():
             raise StopCharge("full standby lost the verified input path")
         battery = pack()
-        flags = battery["flags"]
         full = full_status(battery)
-        if (not flags & 0x80 or flags & 0x9b0f
-                or (flags & 0x4000 and not full)):
-            raise StopCharge(f"pack fault during full standby: {flags:#06x}")
-        if (not 50 <= battery["temp"] <= 400 or not 0 <= battery["capacity"] <= 100
-                or not 6000000 <= battery["voltage_now"] <= FIRMWARE_MV * 1000
-                or not 0 <= battery["constant_charge_current_max"] <= 65534000
-                or (battery["constant_charge_voltage_max"] != 0
-                    and not FIRMWARE_MV * 1000 <= battery["constant_charge_voltage_max"] <= 8900000)):
-            raise StopCharge("invalid pack reading during full standby")
+        check_idle_pack(battery)
         if previous_sample is None or now - previous_sample > 90:
             ready = 0
         eligible = (not full and battery["capacity"] <= RECHARGE_PERCENT
@@ -100,10 +106,12 @@ def initialize_voltage(sink, chip, known):
 
 class FullInput:
     """Restore system input with zero charge current; retain the pack voltage."""
-    def __init__(self, sink, chip):
+    def __init__(self, sink, chip, on_sleep=None):
         self.sink, self.chip = sink, chip
         self.owned = False
         self.known = None
+        self.on_sleep = on_sleep
+        self.input_voltage = self.charge_voltage = None
 
     def ready(self, known, voltage):
         chip, sink = self.chip, self.sink
@@ -133,23 +141,30 @@ class FullInput:
             sink.consumer(True)
         wait_for("BQ standby adapter present", chip.input_present, 4)
         chip.limit_input(voltage=pack_voltage)
+        self.known, self.input_voltage, self.charge_voltage = known, voltage, pack_voltage
         log("full-input-ready", ac=True, consumer=1, charge_target_mA=0,
             charge_voltage_mV=pack_voltage, switch_owned=self.owned)
         return True
 
     def detached(self):
         self.owned = False
+        self.known = None
 
     def close(self):
-        if self.owned:
-            pd = poll_port()
-            if pd.get("attached") and pd.get("pd_state") != 0 and not pd.get("source"):
-                self.sink.consumer(False)
-                log("full-consumer-off")
+        keep = False
+        try:
+            if self.on_sleep is not None and self.known is not None and sys.exc_info()[0] is None:
+                keep = self.on_sleep(self.known, self.input_voltage, self.charge_voltage)
+        finally:
+            if self.owned and not keep:
+                pd = poll_port()
+                if pd.get("attached") and pd.get("pd_state") != 0 and not pd.get("source"):
+                    self.sink.consumer(False)
+                    log("full-consumer-off")
 
 
-def recover_startup(events, sink, chip):
-    standby = FullInput(sink, chip)
+def recover_startup(events, sink, chip, on_sleep=None):
+    standby = FullInput(sink, chip, on_sleep)
     try:
         _recover_startup(events, sink, chip, standby)
     finally:
@@ -260,10 +275,13 @@ def _recover_startup(events, sink, chip, standby):
                 if stopping.is_set():
                     return
                 log("charge-ready", seq=events.seq, previous_mA=current, pd=pd)
+                standby.known, standby.input_voltage, standby.charge_voltage = known, 12000, charge_voltage
+                sleep_options = {} if standby.on_sleep is None else {"on_sleep": standby.on_sleep}
                 charge_after_replug(sink, chip, known, wait=events.wait_charging,
                                     initial_current=current, voltage=charge_voltage,
                                     on_full=lambda: wait_full(events, sink, chip, known,
-                                        input_voltage=12000, charge_voltage=charge_voltage))
+                                        input_voltage=12000, charge_voltage=charge_voltage),
+                                    **sleep_options)
                 armed, requested, deadline = False, False, None
                 continue
             if current:

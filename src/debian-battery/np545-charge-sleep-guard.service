@@ -1,0 +1,16 @@
+[Unit]
+Description=Verify zero charging current before sleep and restart after wake
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/np545xla-power/charge_sleep.py prepare
+ExecStopPost=/usr/lib/np545xla-power/charge_sleep.py resume
+SyslogIdentifier=np545-charge-sleep-guard
+TimeoutStartSec=20
+TimeoutStopSec=20
+
+[Install]
+RequiredBy=sleep.target

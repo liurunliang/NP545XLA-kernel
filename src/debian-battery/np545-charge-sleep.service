@@ -1,0 +1,18 @@
+[Unit]
+Description=Optional NP545XLA charging with sleep preparation and resume
+AssertKernelCommandLine=np545.gpiocharge=1
+AssertKernelCommandLine=np545.battery=1
+Conflicts=np545-gpiocharge.service np545-pd-hotplug.service np545-charge-keepalive.service np545-irq-ack.service np545-ic10-irq.service np545-charge-observe.service
+After=systemd-modules-load.service np545-gpiocharge.service
+
+[Service]
+ExecStartPre=/usr/lib/np545xla-power/charge_sleep.py check-enabled
+ExecStart=/usr/lib/np545xla-power/gpio_charge.py --startup --sleep
+SyslogIdentifier=np545-charge-sleep
+RuntimeDirectory=np545-charge-sleep
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+TimeoutStopSec=12
+
+[Install]
+WantedBy=multi-user.target

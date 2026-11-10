@@ -130,14 +130,22 @@ def stop(*unused):
     stopping.set()
 
 
-def run(*, startup=False):
+def run(*, startup=False, sleep=False):
     args = set(Path("/proc/cmdline").read_text().split())
     if (not {"np545.gpiocharge=1", "np545.battery=1"} <= args
             or args & {"np545.hotplug=1", "np545.irqack=1", "np545.ic10irq=1", "np545.keepcharge=1"}
             or b"samsung,np545xla" not in (DT / "compatible").read_bytes().split(b"\0")):
         raise StopCharge("select the dedicated GPIO101 hotplug entry")
     startup = startup or "np545.chargestartup=1" in args
+    if sleep and not startup:
+        raise StopCharge("sleep mode requires the startup policy")
+    pause = None
+    if sleep:
+        from charge_sleep import SleepPause
+        pause = SleepPause()
     with ExitStack() as stack:
+        if pause is not None:
+            stack.callback(pause.close)
         # SIGTERM must wake the same blocking wait as a GPIO edge, including
         # in the gap between testing the stop flag and entering select().
         rd, wr = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
@@ -148,6 +156,9 @@ def run(*, startup=False):
         for sig in (signal.SIGTERM, signal.SIGINT):
             previous = signal.signal(sig, stop)
             stack.callback(signal.signal, sig, previous)
+        if pause is not None:
+            previous = signal.signal(signal.SIGUSR1, lambda *_: (pause.request(), stop()))
+            stack.callback(signal.signal, signal.SIGUSR1, previous)
         line = claim_gpio(stack, "np545-gpiocharge")
         if startup:
             wait_for("SBS gauge", lambda: (BATTERY / "device/sbs_status").exists(), 60)
@@ -164,23 +175,34 @@ def run(*, startup=False):
                   level=initial, irqs=trace.counts())
         if not initial and not line.wait_edge_events(timeout=0):
             events.pending = events.snapshot()
+        if pause is not None:
+            pause.ready()
         try:
             if startup:
                 from charge_startup import recover_startup
-                recover_startup(events, sink, chip)
+                if pause is None:
+                    recover_startup(events, sink, chip)
+                else:
+                    recover_startup(events, sink, chip,
+                        on_sleep=lambda *a: pause.retain(sink, chip, *a))
             else:
                 recover(events, sink, chip, known)
+            if pause is not None:
+                pause.finish(chip)
         finally:
             trace.log("closing", seq=events.seq, level=line.get_value(PIN).value, irqs=trace.counts())
     trace.log("released", line=trace.lines()[PIN], irqs=trace.counts())
+    if pause is not None:
+        pause.released()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--startup", action="store_true", help="opt into the IC10 startup candidate")
+    parser.add_argument("--sleep", action="store_true", help="opt into the systemd sleep handshake")
     options = parser.parse_args()
     try:
-        run(startup=options.startup)
+        run(startup=options.startup, sleep=options.sleep)
     except (StopCharge, RuntimeError, OSError, ValueError) as exc:
         log("exit", reason=str(exc))
-        sys.exit(0 if stopping.is_set() else 1)
+        sys.exit(0 if stopping.is_set() and not options.sleep else 1)

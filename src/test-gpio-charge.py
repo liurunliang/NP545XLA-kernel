@@ -110,6 +110,46 @@ class EntryTests(unittest.TestCase):
                     legacy_check.assert_called_once_with(sink, chip, known)
                     legacy_run.assert_called_once_with(events, sink, chip, known)
 
+    def test_sleep_ack_follows_resource_release_and_failure_never_acknowledges(self):
+        import charge_sleep
+        for fail in (False,True):
+            with self.subTest(fail=fail), TemporaryDirectory() as tmp, ExitStack() as stack:
+                root=Path(tmp)
+                cmdline=root/'cmdline';cmdline.write_text('np545.gpiocharge=1 np545.battery=1')
+                (root/'compatible').write_bytes(b'samsung,np545xla\0')
+                (root/'device').mkdir();(root/'device/sbs_status').touch()
+                boot=root/'boot';boot.write_text('test-boot')
+                paths={'/proc/cmdline':cmdline,'/proc/sys/kernel/random/boot_id':boot}
+                order=[]
+                line=Mock();line.get_value.return_value.value=1
+                def claim(resources,*args):
+                    resources.callback(lambda:order.append('gpio-released'))
+                    return line
+                pause=Mock()
+                pause.finish.side_effect=(OSError('failed zero readback') if fail else
+                                          lambda chip:order.append('zero-confirmed'))
+                pause.released.side_effect=lambda:order.append('ack')
+                for name,value in dict(Path=lambda p:paths[p],DT=root,BATTERY=root,
+                    claim_gpio=claim,Interrupts=lambda *args:Mock(),Sink=lambda:nullcontext(Mock()),
+                    InputCharger=lambda:nullcontext(Mock()),AckPort=lambda:nullcontext(Mock())).items():
+                    stack.enter_context(patch.object(gc,name,value))
+                stack.enter_context(patch.object(charge_sleep,'SleepPause',return_value=pause))
+                stack.enter_context(patch.object(cs,'recover_startup'))
+                stack.enter_context(patch.object(gc.signal,'set_wakeup_fd',return_value=-1))
+                stack.enter_context(patch.object(gc.signal,'signal',return_value=0))
+                stack.enter_context(patch.object(gc.trace,'log'))
+                stack.enter_context(patch.object(gc.trace,'counts',return_value={}))
+                stack.enter_context(patch.object(gc.trace,'lines',return_value={101:'released'}))
+                if fail:
+                    with self.assertRaises(OSError):gc.run(startup=True,sleep=True)
+                    self.assertEqual(order,['gpio-released'])
+                    pause.released.assert_not_called()
+                else:
+                    gc.run(startup=True,sleep=True)
+                    self.assertEqual(order,['zero-confirmed','gpio-released','ack'])
+                pause.close.assert_called_once()
+
+
 
 if __name__ == "__main__":
     unittest.main()
