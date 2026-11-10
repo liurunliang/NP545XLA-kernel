@@ -40,6 +40,8 @@ namespace NP545PowerBaseline {
         public int SignedRate { get { return unchecked((int)Rate); } }
     }
     public static class Native {
+        [DllImport("kernel32.dll", ExactSpelling=true)]
+        public static extern ulong GetTickCount64();
         [DllImport("powrprof.dll", ExactSpelling=true)]
         private static extern uint CallNtPowerInformation(
             int level, IntPtr input, uint inputLength,
@@ -95,6 +97,7 @@ function Save-Battery([string]$Name) {
         if ($state.BatteryPresent -eq 0) { throw 'SystemBatteryState reports no battery.' }
         [ordered]@{
             TimestampUtc=$sampleTime
+            UptimeMilliseconds=[NP545PowerBaseline.Native]::GetTickCount64()
             Source='CallNtPowerInformation(SystemBatteryState=5)'
             State=$state
             Note='Windows aggregate battery telemetry; may be cached. Rate is raw DWORD; SignedRate is LONG in mW. Not direct SBS or charger registers.'
@@ -145,6 +148,12 @@ function Resolve-EmuEcImagePath([string]$RawPath, [string]$WindowsDirectory) {
 
 # Take the first sample before the slower inventory/report operations.
 Save-Battery 'battery-first'
+if ($Phase -eq 'Before') {
+    Save-Json 'system-event-cursor' {
+        $latest = Get-WinEvent -LogName System -MaxEvents 1
+        [ordered]@{ RecordId=$latest.RecordId; CapturedUtc=(Get-Date).ToUniversalTime().ToString('o') }
+    }
+}
 Save-Json 'system' {
     [ordered]@{
         Phase=$Phase
@@ -219,15 +228,33 @@ Save-Json 'trace-tools' {
 }
 
 if ($Phase -eq 'After') {
-    $before = Get-Content -Raw -LiteralPath (Join-Path $TrialDirectory 'before\complete.json') | ConvertFrom-Json
-    $since = [DateTimeOffset]::Parse($before.CompletedUtc).LocalDateTime.AddMinutes(-2)
     Save-Json 'power-events' {
-        Get-WinEvent -FilterHashtable @{
-            LogName='System'; StartTime=$since
-            ProviderName=@('Microsoft-Windows-Kernel-Power', 'Microsoft-Windows-Power-Troubleshooter',
-                'Microsoft-Windows-Kernel-Boot')
-        } -MaxEvents 1000 | ForEach-Object {
-            [ordered]@{ TimeUtc=$_.TimeCreated.ToUniversalTime().ToString('o');
+        # Wall time can jump backwards during NTP synchronization. Use log order.
+        $providers = @('Microsoft-Windows-Kernel-Power', 'Microsoft-Windows-Power-Troubleshooter',
+            'Microsoft-Windows-Kernel-Boot', 'Microsoft-Windows-Kernel-General',
+            'Microsoft-Windows-Time-Service')
+        $providerFilter = ($providers | ForEach-Object { "Provider[@Name='$_']" }) -join ' or '
+        $cursorPath = Join-Path $TrialDirectory 'before\system-event-cursor.json'
+        $recordFilter = ''
+        if (Test-Path -LiteralPath $cursorPath) {
+            $cursor = Get-Content -Raw -LiteralPath $cursorPath | ConvertFrom-Json
+            $recordId = [long]$cursor.RecordId
+            $latest = Get-WinEvent -LogName System -MaxEvents 1
+            if ($recordId -le 0 -or $latest.RecordId -lt $recordId) {
+                throw 'System event cursor is invalid or the log was reset; retain reports and investigate.'
+            }
+            $recordFilter = '(EventRecordID > ' + $recordId + ') and '
+        } else {
+            $script:problems += [ordered]@{ Item='power-events-boundary';
+                Error='Before has no event cursor; retaining recent records without a trial-specific lower bound.' }
+        }
+        $xpath = '*[System[' + $recordFilter + '(' + $providerFilter + ')]]'
+        $events = @(Get-WinEvent -LogName System -FilterXPath $xpath -MaxEvents 2001)
+        if ($events.Count -gt 2000) {
+            $script:problems += [ordered]@{ Item='power-events-limit'; Error='More than 2000 matching records; older events omitted.' }
+        }
+        $events | Select-Object -First 2000 | ForEach-Object {
+            [ordered]@{ RecordId=$_.RecordId; TimeUtc=$_.TimeCreated.ToUniversalTime().ToString('o');
                 Provider=$_.ProviderName; Id=$_.Id; Xml=$_.ToXml() }
         }
     }

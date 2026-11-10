@@ -313,7 +313,33 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\NP545XLA-PowerBaseline
 3. `before/battery-last-system.json` 与 `after/battery-first-system.json` 的容量、充放电状态；WMI 有实例时再对照 `battery-last.json` / `battery-first.json` 的容量和电压。还应核对期间是否重启、是否改变电源来源。两种来源都是 Windows 遥测，可能缓存，不能当作直接 SBS 寄存器读取。
 4. **AC 会话的 SleepStudy 不记录能量变化**，因此不能用其中的 Charge 标记证明实际充电；需结合前后容量读数。即使容量增长，也只支持该测试区间的净充电，无法单独区分待机维护与唤醒附近的充电，更不能证明执行者身份。若需定位 EmuEC 活动，下一阶段再进行针对性 ETW/总线观测。[SleepStudy 限制](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/modern-standby-sleepstudy) · [powercfg 命令](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/powercfg-command-line-options)
 
-脚本已用官方 PowerShell 7.4.6 便携版完成语法解析；新增映像路径处理检查了 5 种正常形式和 3 种拒绝形式，文档中的 5 段 PowerShell 命令也已通过解析。2026-11-10 又验证了原生 C# 编译、32 字节结构布局和负功率转换，并在 Windows 11 ARM64 build 26200 完成 Before 真机采集，Errors 为空。待机前 EmuEC 服务为 Running，磁盘映像摘要与反汇编样本一致；系统报告外部电源接入、正在充电，最后一次汇总容量为 4903，功率为 +23457 mW。此时只完成了睡眠前检查，尚不能判定睡眠期间充电或低功耗驻留。两机墙钟存在偏差，后续应在 Windows 自身的事件时间线上对齐，不直接相减 Mac 与 Windows 时间。新增记录在 `output/hardware-boundary/windows-validation-20261110/`，此前检查在 `power-collector-validation.txt`。`complete.json` 只表示一次采集结束，须检查其中 Errors，不能当作验收通过标记。
+脚本已用官方 PowerShell 7.4.6 便携版完成语法解析；新增映像路径处理检查了 5 种正常形式和 3 种拒绝形式，文档中的 5 段 PowerShell 命令也已通过解析。2026-11-10 又验证了原生 C# 编译、32 字节结构布局和负功率转换，并在 Windows 11 ARM64 build 26200 完成 Before / After 真机采集，二者 Errors 均为空。`complete.json` 只表示一次采集结束，仍须核对原始记录与事件覆盖范围。此前检查在 `output/hardware-boundary/power-collector-validation.txt`，本轮原始文件、采集器副本、摘要及分析在 `output/hardware-boundary/windows-validation-20261110/`。
+
+### Windows 插电待机基线实测（2026-11-10）
+
+本轮使用 `dcf8ac9` 的采集器，SHA256 为 `c3e35fd97aec6f8ef3011a1b583fccb43ed28832c7373d4097e5193fc2ec9bce`。用户在原端口插电，从开始菜单进入睡眠，随后按电源键唤醒。期间没有主动 SSH 查询、额外 WPP/WPR 追踪或充电参数修改。原定计时 20 分钟，实际从进入待机到用户唤醒约 **39 分 19 秒**；按真实事件时长记录，不计作恰好 20 分钟的测试。
+
+| 核对项 | 本轮证据 |
+| --- | --- |
+| 驱动与电源 | EmuEC 为 Running，磁盘 SHA256 与反汇编样本一致；四段待机退出事件均报告 AC，电池未更换 |
+| 是否重启 | 相关 Kernel-Power 事件的 BootId 均为 `27`，会话连续；CIM 的 LastBootUpTime 随校时变化，不能单独据此判为重启 |
+| 实际待机时长 | 事件 `5924 / 5928 / 5961 / 6155` 的 DurationInUs 合计 `2359.265907 s`；使用校时事件修正首尾时间所得 `2359.245398 s`，相差约 21 ms |
+| 待机边界容量 | 进入待机 `6129 mWh`（约 15%），唤醒 `23290 mWh`（约 57%），净增约 `17.2 Wh`；这是 Windows 驱动估计，约以 1% 容量为步进，不是独立电量计测量 |
+| 采集边界容量 | Before 最后样本 `4903 mWh`（约 12%）；After 首个样本 `23290 mWh`。Before 到真正进入待机仍有清醒充电时间，因此不能把二者全部增量算作待机所得 |
+| 最深低功耗驻留 | 四段退出事件的软件 / 硬件 DRIPS 均为 0，最后约 30 分钟的 SleepStudy Sleep 段也报告 `LowPowerStateTime=0`、`HwLowPowerStateTime=0` |
+| 活动线索 | 最后长段中，Update Orchestrator / WU 分别活跃约 1020 s，ARC 的 cx 电源域约束约 676 s，`\\_SB.IC20` I²C 设备活跃约 45.6 s。活动可能重叠，不能相加为总时长，也不能仅凭设备活跃证明某条充电寄存器写入 |
+
+**本轮确认 Windows 的待机区间内电池容量明显增长，但没有验证最深平台低功耗下的持续充电，更没有证明独立 EC / 固件接管。** Sleep 状态标签并不保证整段都在 DRIPS；本轮系统更新和平台约束持续存在。与原厂静态分析结合，只能说主机侧维护仍有机会执行，具体 EmuEC 定时器、SBS 读取和 BQ25710 刷新仍需针对性追踪。[Modern Standby 的状态与 DRIPS](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/modern-standby-states) · [SleepStudy 的活动与驻留指标](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/modern-standby-sleepstudy)
+
+本轮另有三处数据边界：
+
+- Windows 时间服务将墙钟回拨约 `8 h 2 min 9 s`，Kernel-General 事件 `5940` 保存了 OldTime / NewTime，随后还有两次毫秒级校正。原采集器按 Before 时间过滤，虽然没有报错，却漏掉了校时后的事件；已另行按日志顺序补采最近 500 条相关事件，保存为 `power-events-by-record.json`。BatteryReport 的跨校时 Duration 出现无符号下溢，不能用于算时长；SleepStudy 最后 Sleep 段与 Kernel-Power 的 SleepDuration 还存在 5 秒差异，保留两份原值，不使用虚假精度。
+- After 首个样本为 `AcOnLine=1, Charging=0, Discharging=1, SignedRate=+26280 mW`，标志与正功率不一致；约 15 秒后恢复 `Charging=1, Discharging=0`，功率 `+24356 mW`。因此不以唤醒瞬间的单个状态位判断充电中断。最后容量还从 23290 增至 23699 mWh，但不把唤醒后的增长计入待机。
+- AC 报告的 `EnergyDrain` / `Discharge` 汇总为 0，仍可见进入 / 退出容量字段增长；不能把汇总为 0 当作没有充入电量。待机容量差与首次 After 样本互相吻合，但仍属于同一 Windows 驱动遥测链。
+
+采集器现为 Before 增加 System 日志序号游标，After 按 `EventRecordID` 获取电源、启动和校时事件，并在电池样本保存 `GetTickCount64` 运行时间。缺少旧版游标、日志重置或超过 2000 条上限时会记录错误，不静默宣告覆盖完整。新增逻辑通过语法和 C# 编译检查；尝试在真机验证新查询时 SSH 两次超时，尚未完成新版整轮复测，本轮结论来自已补齐的原始事件。没有修改系统时钟、更新策略或睡眠配置。
+
+下一轮先确认系统校时稳定、更新后台活动结束，再按下节做清醒充电的 WPP 小样本，之后才将驱动日志与待机驻留对齐。若平台仍无法进入 DRIPS，应继续定位 cx 约束及 IC20 活动；不能跳过这一边界，直接把本轮结果解释为硬件自治充电。
 
 ### 原厂 WPP 入口与后续运行时取证
 
