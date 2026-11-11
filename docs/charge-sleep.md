@@ -91,3 +91,13 @@ post hook 为 7909.058 秒。守卫启动新 PID 29456、invocation `870a8fc7f84
 镜像构建脚本默认配置 `Storage=volatile` 和 `ReadKMsg=no`，前一轮也需要通过 `dmesg` 补取内核记录。强制重启可能使本次关键过程丢失；还需在连接恢复后检查上一启动 journal 与 pstore。当前证据不能确认本次是否完成睡前零电流确认、是否进入内核睡眠、是否已恢复但显示未亮，亦不能确定故障由充电服务还是其他设备恢复路径造成。下一次复测前需补充能跨重启保留的定向证据，不能仅重复同一流程。
 
 已保存 `charging-after-replug.json`、`charging-before-watch.jsonl`、`charging-before-summary.json`、`charging-before-sleep.json` 和 `charging-sleep-user-confirmation.json`；`delivery-manifest.json` 明确标记本轮失败及不可设为默认。重启后状态与故障归因仍待补充。
+
+## 重刷后的基线（2026-11-11）
+
+用户重刷系统并恢复 SSH 后，主机密钥已变化；新公钥与用户本机已有的 SSH 信任记录一致，使用独立 known_hosts 连接，保留旧记录。新启动 ID 为 `60bc8efe-29b4-497c-8de2-5060bd11873d`，仍为 Debian 13、内核 7.0.0、原 Image `163b71d2…64735b` 及 USB 根 UUID `aeb13805-ba45-4385-8a98-067b839ca579`。命令行带 `np545.chargestartup=1`，GPIO46 的系统唤醒仍 disabled。
+
+新系统安装的是充满等待阶段的版本：gpiocharge 7.0.0-6、pd-hotplug / ic10-irq 7.0.0-9、irq-ack 7.0.0-8、keepalive 7.0.0-3。七个现场电源模块与上一版回退基线逐一匹配；sleep 候选包和两个候选 unit 均不存在。`sleep.target` 已被屏蔽。journal 配置为 `Storage=persistent`、`SystemMaxUse=64M`、`ReadKMsg=yes`，与失败试验时的内存日志不同。当前仅存在新启动日志，旧试验备份目录和 pstore 均为空或不存在，不能从新系统补回失败一轮的过程。
+
+本次只读检查发现电源公布的是 5 V / 3 A、9 V / 3 A、15 V / 3 A、20 V / 4.7 A，缺少既有策略要求的固定 12 V / 3 A。服务在启动时钟 23.833 秒以 `source does not offer fixed 12 V / 3 A` 退出。独立读数为 PD 15 V / 3 A、BQ 0 mA / 8760 mV、输入限流 `0x2e00`，电池 97%、5145 mAh、实际电流 0。已请用户确认充电器或连接方式是否改变；没有放宽档位检查、写充电寄存器、安装睡眠候选或解除睡眠屏蔽。当前电源条件不匹配可以解释本次服务拒绝接管，不能用于归因前一天的唤醒失败。
+
+新基线、主机验证及 journal 状态证据保存在 `output/charge-sleep-reflash-20261111/`。继续充电或睡眠试验前，须先确认输入条件并重新建立现场基线。
