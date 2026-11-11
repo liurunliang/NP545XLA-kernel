@@ -148,9 +148,52 @@ controller seconds follow nanosecond IRQ records, with a regression test. Its
 module is byte-identical to the QEMU/physical-tested module. Version 2 was installed
 and the reporter alone restarted: PID 13831, zero restarts, online state restored,
 original charging controller unchanged. See `update-v2.log`.
-The service is started for validation, **not yet enabled at boot**. Physical unplug
-and replug acceptance remains pending. No real sleep, new boot, different adapter,
-or other desktop environment was tested as part of this feature.
+The physical unplug/replug test subsequently passed, and the status service is
+now **enabled at boot**. No real sleep, new boot, different adapter, positive-current
+charging phase, or other desktop environment was tested as part of this feature.
+
+### Physical unplug/replug acceptance, 2026-11-11
+
+The user unplugged the original IC10 charger and later reattached it to the same
+port. The boot ID and both charging/status service invocations stayed unchanged.
+
+| Phase | Standard interface / UPower | Battery and controller |
+| --- | --- | --- |
+| Unplugged | IC10 stopped answering (NACK), so the bridge removed `np545-usb-c`; UPower removed the line-power object and set `OnBattery=true` | 97%, `Discharging`, measured current -942,000 µA in the captured sysfs snapshot; controller waiting for attachment |
+| Reattached | `np545-usb-c` reappeared with `online=1`, PD 12,000,000 µV / 3,000,000 µA; UPower reported online and `OnBattery=false` | Existing controller restored the input path, programmed charge current remained 0 µA, ceiling 8,400,000 µV |
+| Stable after reattach | Seven samples over 30.27 seconds all retained those properties and `OnBattery=false` | Current stayed 0 µA; gauge reported `Full` at 97%, so the unchanged controller retained its full/recharge waiting policy |
+
+This unplug test exercised **unknown/unavailable input reporting**, not a persistent
+`online=0` object: a NACK is deliberately not converted into physical-detach proof
+by the reporter. The independent SBS battery supplied the actual discharge state.
+The controller's detach event was at BOOTTIME 5051.839 s, and the reporter published
+unknown at 5055.334 s. After the first successful `full-sample` at 5684.804 s, it
+published online at 5688.204 s. These are producer timestamps, not measured desktop
+rendering latency. Raw evidence is in `unplug-wifi.log`, `replug-wifi.log`, and
+`finish-validation.log`.
+
+`systemctl enable np545-power-supply.service` created its `multi-user.target.wants`
+link and read back `enabled`; it remains ordered after `np545-gpiocharge.service`.
+The current kernel command line already requests the controller through
+`systemd.wants=np545-gpiocharge.service`. The charging controller stayed PID 5565,
+the reporter PID 13831, and both had zero restarts throughout this physical test.
+The five previously masked sleep targets remain masked. **Autostart has been
+configured and inspected, but a subsequent physical boot has not been exercised.**
+
+### Wired access interruption during acceptance
+
+The wired address `10.86.97.82` became unreachable, so acceptance continued through
+the user-provided Wi-Fi address `10.86.112.192`, still on SSH port 2223 and with the
+same pinned host key. SSH remained PID 499 and was confirmed listening on
+`0.0.0.0:2223`; it had not stopped. The user initially tested the default port 22,
+which is not the configured SSH port.
+
+The RTL8153/r8152 interface retained its address and reported carrier/up, but kernel
+logs contained USB status `-71`, failed reads, a disconnect and a SuperSpeed reset.
+See `wired-unplug-diagnostic.log`. This identifies a USB Ethernet path problem;
+it does not establish its root cause or that charging unplug/replug caused it.
+No USB reset, network reconfiguration, SSH restart, or reboot was performed by this
+test. The wired issue remains unresolved; use Wi-Fi for the next connection.
 
 Artifacts and raw evidence: `output/power-supply-20261111/` in the isolated
 `dev/runliang/power-supply` checkout. The source is separate from other integration
