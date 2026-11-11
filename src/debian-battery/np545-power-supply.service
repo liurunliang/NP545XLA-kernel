@@ -1,0 +1,20 @@
+[Unit]
+Description=NP545XLA read-only external power status bridge
+After=np545-gpiocharge.service
+ConditionPathExists=/sys/class/power_supply/np545-battery
+
+[Service]
+Type=simple
+ExecStartPre=/sbin/modprobe np545_power_supply
+ExecStart=/usr/bin/python3 /usr/lib/np545xla-power/power_supply_report.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
