@@ -113,3 +113,44 @@ post hook 为 7909.058 秒。守卫启动新 PID 29456、invocation `870a8fc7f84
 另外只读记录了当前输入设备及唤醒权限：USB 鼠标自身 wakeup enabled，但其 hub、root hub 和 xHCI 路径为 disabled；`gpio-keys` 的 wakeup enabled。已询问用户上次尝试的具体唤醒方式及屏幕表现，以区分未收到唤醒事件和恢复卡住。当前配置不能倒推失败一轮的实际唤醒事件，尚未据此归因或修改权限。
 
 证据为 `original-adapter-preflight.json`、`service-recovery.jsonl`、`restored-charge-watch.jsonl`、`service-recovery-summary.json`、`restored-final.json` 和 `wakeup-input-baseline.json`。
+
+### 清醒时开合盖对照通过
+
+用户补充：失败一轮中，电源键、键盘、鼠标、触控板及合盖后重新开盖均试过，屏幕始终完全不亮。因此不能仅以当前 USB hub 未启用 wakeup 解释该次故障。
+
+2026-11-11 在同一新启动中，以 `systemd-inhibit --what=handle-lid-switch:sleep:idle --mode=block` 运行 180 秒只读观察，同时保留五个 sleep/suspend 目标的持久屏蔽。用户合盖再开盖后明确确认“正常亮起并显示画面”。记录为：
+
+- GPIO50 为 high → low → high，IRQ 计数 0 → 1 → 2，`SW_LID` 为 0 → 1 → 0；关闭持续 6.024605 秒。
+- 内核记录合盖 PWM duty 256 → 0，开盖恢复至 256；与用户视觉确认一致。
+- 睡眠成功/失败计数保持 0/0，boottime 与 monotonic 差值未增加；本轮没有进入睡眠。
+- 充电服务仍为 PID 5525、零重启；末次读数为 100%、5282 mAh、实际 0 mA、BQ 目标 0 mA / 8760 mV、PD 12 V / 3 A。
+
+观察程序正常结束，临时 inhibitor 已解除，持久睡眠屏蔽仍保留。这验证当前清醒状态下的盖子输入和画面恢复，不能证明睡眠中的唤醒 IRQ 或设备恢复路径正常，也不能补回前一轮丢失的日志。证据为 `wake-failure-user-details.json`、`lid-awake.jsonl`、`lid-awake-after.json`、`lid-awake-summary.json` 和 `lid-observer-cleanup.txt`。
+
+### 独立 PM 调试内核与后续步骤
+
+当前内核没有 `/sys/power/pm_test`。为分离进程冻结、设备回调及真正睡眠阶段，新增 `src/build-sleep-debug-image.sh`，在私有构建目录中保留已验证的 GPIO50 交替边沿和 GPIO170 蓝牙补丁，只增加 `CONFIG_PM_DEBUG=y` 与其依赖 `CONFIG_PM_SLEEP_DEBUG=y`。未启用自动启动睡眠测试、PM_ADVANCED_DEBUG 或 DPM_WATCHDOG。原源码、构建输出和已验证 Image 均经哈希确认未被改写。
+
+候选 Image SHA256 为 `ffba40697b5364f0e48693e7b0f71bee10eec1284a4d6086664fb940a9188179`；版本仍为 7.0.0，utsrelease/utsversion 与基线相同。14,951 个现有内核导出记录保留，增加 `pm_debug_messages_should_print`。由于 `CONFIG_MODVERSIONS=n`，导出表和 vermagic 检查不构成完整 ABI 证明，仍须在真机验证既有模块加载。
+
+`src/test-sleep-debug-qemu.py` 使用静态 ARM64 BusyBox 和最小 initramfs，在 QEMU 11/HVF 中实际启动此 Image，依次设置 `pm_test=freezer`、`pm_test=devices` 并写入 `state=freeze`。两阶段均等待约 5 秒后成功返回，最终恢复 `pm_test=none` 并关机，宿主退出码为 0。它验证通用 PM 测试接口及虚拟设备回调，不代表三星硬件已通过。测试机制参考内核的 [Basic PM Debugging](https://docs.kernel.org/power/basic-pm-debugging.html)。
+
+`src/build-sleep-debug-boot.sh` 以真机只读取回的 EFI `7ad52e7e…11a46fa` 为基线，完整保留原菜单，在末尾添加 `sleep-debug` 项。它复用当前设备树、initramfs、原充电服务及其他启动参数，只切换 Image、增加诊断标记并提高日志级别。`np545_pmdebug_once` 在 GRUB 成功写回 0 后才选择一次诊断启动；下次普通启动仍为原 Latest。菜单通过 `grub-script-check`，嵌入 EFI 后再次读取并与源菜单比较。启动诊断项不会自动执行 PM 测试。
+
+安装工具 `src/install-sleep-debug-boot.sh` 有四个明确操作：
+
+- `--check`：核对机型、USB 根和 ESP 身份、包哈希、原 Image/EFI、设备树、五个睡眠屏蔽和全部一次性标记；仅只读挂载 ESP。
+- `--install`：保存原 EFI 备份，安装独立 Image 和未激活的菜单项，保持默认 Latest。
+- `--arm`：在所有其他标记为 0 时，仅将诊断项标记设为 1，不重启。
+- `--rollback`：清除本次标记并恢复原 EFI；不删除独立 Image，以便保留证据。
+
+写入操作均在 USB 分区身份校验与锁保护后进行，完成后以只读重新挂载核对。诊断包自带 Debian ARM64 的 `grub-file`、`grub-editenv` 和缺失的 libdevmapper，仅在包内运行，不安装系统软件。没有任何操作解除睡眠屏蔽、修改充电策略或自动发起睡眠。
+
+后续真机验证按以下顺序进行，每一步保存证据后才继续：
+
+1. 一次性启动诊断内核，验证桌面、USB 根、模块加载、SSH、充电基线和 `pm_test` 接口；此时仍禁止桌面自动睡眠。
+2. 正常停止充电控制进程，独立确认电流目标为 0、输入与电池状态，保存并同步日志；不能在旧充电服务运行时直接绕过守卫写 `state`。
+3. 先执行 `freezer`，验证自动返回和输入状态；通过后再准备 `devices`，记录设备回调与恢复。`devices` 仍可能因真实驱动故障卡住，并非无风险测试。
+4. 分阶段测试通过后，再决定完整 s2idle 的单变量对照和睡眠候选复测；不会把 QEMU 通过或清醒时开盖亮屏算作修复。
+
+诊断构建、QEMU 日志、当前 EFI 备份和安装包位于 `output/sleep-debug-20261111/`。最终 `arm64/boot-v3/` 已暂存至真机 `/var/tmp/np545-sleep-debug-20261111/boot-v3/`，`--check` 实际退出码为 0，证据为 `device-preflight-v3.txt`；新系统缺少工具及工具不支持 `--version` 的两次预检均在写入前退出，修正后才通过。所有旧的一次性标记为 0，ESP 已卸载，未安装或激活诊断入口。物理诊断内核启动、三星设备阶段测试和本轮安装/回退写入均尚未验收。
