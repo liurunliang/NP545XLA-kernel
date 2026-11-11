@@ -154,3 +154,17 @@ post hook 为 7909.058 秒。守卫启动新 PID 29456、invocation `870a8fc7f84
 4. 分阶段测试通过后，再决定完整 s2idle 的单变量对照和睡眠候选复测；不会把 QEMU 通过或清醒时开盖亮屏算作修复。
 
 诊断构建、QEMU 日志、当前 EFI 备份和安装包位于 `output/sleep-debug-20261111/`。最终 `arm64/boot-v3/` 已暂存至真机 `/var/tmp/np545-sleep-debug-20261111/boot-v3/`，`--check` 实际退出码为 0，证据为 `device-preflight-v3.txt`；新系统缺少工具及工具不支持 `--version` 的两次预检均在写入前退出，修正后才通过。所有旧的一次性标记为 0，ESP 已卸载，未安装或激活诊断入口。物理诊断内核启动、三星设备阶段测试和本轮安装/回退写入均尚未验收。
+
+### 诊断内核一次性真机启动通过
+
+用户确认可以安装并重启后，在原启动 `60bc8efe…1873d` 保存满电基线：PD 12 V / 3 A、BQ 0 mA / 8760 mV、100%、5282 mAh、实际 0 mA，原服务 PID 5525。随后运行最终包的 `--install` 和 `--arm`，两次均返回 0，并通过只读重新挂载核对 EFI、独立 Image、原版备份及标记。旧 EFI 保存为 USB ESP 上的 `/EFI/BOOT/BOOTAA64.EFI.pre-pmdebug-7ad52e7e7a2797a1`。同步 journal 和文件系统后正常重启，没有执行睡眠。
+
+新启动 ID 为 `cebcfca3-61f6-4fba-977a-b458e316fbc1`。旧地址 SSH 超时后，用户确认 Linux 桌面画面正常，并提供新 IP `10.86.97.82`；使用原主机密钥严格验证后恢复连接。实际 `BOOT_IMAGE` 指向 `ffba4069…88179` 诊断 Image，文件哈希匹配，`np545.pmdebug=1` 存在，`pm_test` 显示 `[none] core processors platform devices freezer`。
+
+显卡 msm、EC 键盘、只读电池、背光、PCIe PHY、ath11k Wi-Fi、蓝牙 hci_uart 和 UVC 模块均加载。LightDM/Xorg/Xfce 运行，内屏 eDP connected，hci0 和 video0/video1 存在，相关服务 active、零重启、没有失败 unit。未发现模块格式或未知符号错误。原基线已有的两项 SPMI probe 告警及 cpufreq ICC 延迟探测仍存在，不能将本次启动描述为没有内核告警；本轮也没有重做相机采集、蓝牙扫描和 Wi-Fi 联网验收。
+
+七个充电 Python 文件与重启前逐一匹配。新服务 PID 384 于启动时钟 17.127 秒进入满电等待，零重启。本次固件启动后的输入为 5 V / 3 A、BQ 0 mA / 8400 mV，服务按既有满电策略保留输入和零目标，没有主动恢复睡前的 12 V / 8760 mV。184.590 秒独立读数为 100%、5282 mAh、实际 0 mA；启动初期存在小幅负电流，不能说从启动开始每一瞬间都是零电流。本轮确认满电等待正常，不构成新内核下未满电充电恢复或完整充电循环的验收。
+
+只读回查真实 ESP：诊断 EFI 与包一致，原 EFI 备份完整，全部十个一次性标记为 0，包括 `np545_pmdebug_once=0`。原 Latest 默认项保留，下次普通重启仍走原内核。五个睡眠目标仍持久 masked，GPIO46 系统唤醒 disabled，睡眠成功/失败计数 0/0，`pm_test=none`。**诊断启动已通过，真机 freezer/devices 及完整 s2idle 尚未执行，原唤醒故障尚未判定或修复。**
+
+证据：`before-install.json`、`install.txt`、`arm.txt`、`reboot-request.json`、`reconnect.jsonl`、`after-boot-probe.json`、`after-boot-inventory.json`、`after-boot-esp.json`、`deployment-summary.json`、`boot-summary.json`。
