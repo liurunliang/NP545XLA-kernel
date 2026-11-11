@@ -27,7 +27,7 @@ install -Dm644 "$here/debian-battery/np545-power-supply.service" "$pkg/usr/lib/s
 mkdir -p "$pkg/DEBIAN"
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: np545xla-power-supply
-Version: $release-1
+Version: $release-2
 Architecture: arm64
 Maintainer: NP545XLA Linux contributors <root@localhost>
 Depends: kmod, python3, systemd, np545xla-gpiocharge (= $release-6), np545xla-battery-ro (= $release-5)
@@ -45,5 +45,5 @@ if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
 fi
 HOOK
 chmod +x "$pkg/DEBIAN/prerm"
-dpkg-deb --root-owner-group --build "$pkg" "$out/np545xla-power-supply_${release}-1_arm64.deb"
-sha256sum "$out/np545_power_supply.ko" "$out/np545xla-power-supply_${release}-1_arm64.deb" > "$out/SHA256SUMS"
+dpkg-deb --root-owner-group --build "$pkg" "$out/np545xla-power-supply_${release}-2_arm64.deb"
+sha256sum "$out/np545_power_supply.ko" "$out/np545xla-power-supply_${release}-2_arm64.deb" > "$out/SHA256SUMS"

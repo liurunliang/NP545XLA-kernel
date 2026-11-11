@@ -76,7 +76,9 @@ def evidence(rows, boot_id, invocation, now):
             if (type(stamp) not in (int, float) or not math.isfinite(stamp)
                     or not 0 <= stamp <= now + 0.001):
                 return None
-            if latest is not None and stamp < latest['boottime']:
+            # Controller seconds are rounded to milliseconds; IRQ trace records
+            # retain nanoseconds. Adjacent records can appear 0.5 ms backwards.
+            if latest is not None and stamp + 0.001 < latest['boottime']:
                 return None
             latest = event
         except (KeyError, TypeError, ValueError):

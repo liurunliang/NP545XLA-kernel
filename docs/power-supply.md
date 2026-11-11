@@ -76,7 +76,7 @@ gcc -static -Wall -Wextra -Werror -O2 src/debian-battery/power_supply_abi_test.c
 ```
 
 The build runs `W=1`, checks that no I2C/GPIO/regmap/Type-C control symbols are
-imported, and creates only `np545xla-power-supply_7.0.0-1_arm64.deb`. It never rebuilds
+imported, and creates only `np545xla-power-supply_7.0.0-2_arm64.deb`. It never rebuilds
 or installs the charging/sleep candidate packages. Installation does not start or
 enable the reporter automatically.
 
@@ -93,7 +93,7 @@ normal Samsung loading never uses that parameter.
 After module/QEMU validation, on the matching Samsung kernel:
 
 ```sh
-sudo dpkg -i np545xla-power-supply_7.0.0-1_arm64.deb
+sudo dpkg -i np545xla-power-supply_7.0.0-2_arm64.deb
 sudo systemctl start np545-power-supply.service
 cat /sys/class/power_supply/np545-usb-c/uevent
 upower -e
@@ -120,13 +120,40 @@ internal storage, and sleep configuration are outside this package.
 
 ## Validation record
 
-2026-11-11: 18 Python test methods passed locally and on ARM64. QEMU exercised 70
+2026-11-11: 19 Python test methods passed locally and on ARM64. QEMU exercised 70
 ABI/property/lifecycle assertions, including actual 20-second expiry. A read-only
 Samsung preflight matched `online=1`, 5 V / 3 A, 0 mA charge target and 8.400 V
-programmed ceiling while the battery was full. Existing controller PID 5565 and
-invocation `4168ed72e5ea4d53a134ea2b139d9b0e` were unchanged. This preflight is not yet
-the loaded-module/UPower or physical unplug/replug acceptance record.
+programmed ceiling while the battery was full.
+
+The final package was then installed and started without reboot on physical boot
+`cebcfca3-61f6-4fba-977a-b458e316fbc1`, kernel 7.0.0 (the previously accepted PM-debug
+image). `test_mode` was not used. The live module produced the expected properties
+and UPower automatically created `/org/freedesktop/UPower/devices/line_power_np545_usb_c`
+with `online: yes` and `power supply: yes`; `OnBattery` was false. The original SBS
+battery remained a separate normal battery object.
+
+Pausing only the new reporter for 23 seconds removed the supply from both sysfs
+and UPower. Resuming it restored online state. Stopping/restarting only its service
+also removed/restored the object. The original charging controller stayed PID 5565,
+invocation `4168ed72e5ea4d53a134ea2b139d9b0e`, with zero restarts and continuing full
+standby samples. No matching kernel warnings appeared. The lifecycle wrapper's
+final `journalctl --grep` returned 1 because it found no entries, after all assertions
+had completed; this is recorded explicitly in `lifecycle-result.json`.
+
+Final module SHA-256: `5f5a9986da4052f680ec5058ecc87b7d110cd4f3f814bda5d9bdef4e9f24b3b3`.
+Final package (7.0.0-2) SHA-256: `b29a32db55b581e64c394fbb3f56090ccd4cfb240d2635f601d71a2e37398878`.
+The first loaded package was 7.0.0-1 (`c1c5ce82e7ce4f348063ba07927ebf6efff86b97868fe9c5f58204cd2b5acd0e`).
+Version 2 adds tolerance for sub-millisecond apparent event reversal when rounded
+controller seconds follow nanosecond IRQ records, with a regression test. Its
+module is byte-identical to the QEMU/physical-tested module. Version 2 was installed
+and the reporter alone restarted: PID 13831, zero restarts, online state restored,
+original charging controller unchanged. See `update-v2.log`.
+The service is started for validation, **not yet enabled at boot**. Physical unplug
+and replug acceptance remains pending. No real sleep, new boot, different adapter,
+or other desktop environment was tested as part of this feature.
 
 Artifacts and raw evidence: `output/power-supply-20261111/` in the isolated
 `dev/runliang/power-supply` checkout. The source is separate from other integration
 sessions; no merge or push is implied by these tests.
+An archival copy is also kept in the main repository's ignored
+`output/power-supply-status-20261111/` directory, including source and evidence.

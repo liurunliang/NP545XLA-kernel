@@ -85,6 +85,10 @@ class StatusTests(unittest.TestCase):
         edge = self.row(dict(event='edge', boottime_ns=101000000000))
         self.assertIsNone(r.evidence([self.row(), edge], 'abcd', 'invocation', 102))
 
+    def test_millisecond_rounding_after_nanosecond_record_is_accepted(self):
+        edge = self.row(dict(event='edge', boottime_ns=100000400000))
+        self.assertEqual(r.evidence([edge, self.row()], 'abcd', 'invocation', 101), self.proof)
+
     def test_stale_future_and_nonfinite_proof(self):
         for stamp in (34, 102, float('nan'), float('inf'), -1, '100', True):
             with self.subTest(stamp=stamp):
