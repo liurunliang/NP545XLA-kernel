@@ -168,3 +168,28 @@ post hook 为 7909.058 秒。守卫启动新 PID 29456、invocation `870a8fc7f84
 只读回查真实 ESP：诊断 EFI 与包一致，原 EFI 备份完整，全部十个一次性标记为 0，包括 `np545_pmdebug_once=0`。原 Latest 默认项保留，下次普通重启仍走原内核。五个睡眠目标仍持久 masked，GPIO46 系统唤醒 disabled，睡眠成功/失败计数 0/0，`pm_test=none`。**诊断启动已通过，真机 freezer/devices 及完整 s2idle 尚未执行，原唤醒故障尚未判定或修复。**
 
 证据：`before-install.json`、`install.txt`、`arm.txt`、`reboot-request.json`、`reconnect.jsonl`、`after-boot-probe.json`、`after-boot-inventory.json`、`after-boot-esp.json`、`deployment-summary.json`、`boot-summary.json`。
+
+### 满电条件下 freezer 与 devices 分阶段诊断
+
+用户要求继续后，在同一诊断启动 `cebcfca3…6fbc1`、原电源与连接方式下执行。新增 `src/probe-debian-pm-stage.py`，只允许 `freezer` 和 `devices`；预先核对启动、USB 根、五个持久睡眠屏蔽、GPIO46 策略、七个充电模块哈希、固定 12 V / 3 A 电源能力及当前满电零目标。正常停止现有服务后，独立读回 BQ 目标为零，并用 pinmux 的 `UNCLAIMED` 和 GPIO 字符设备的 used/consumer 双重确认资源释放。脚本本身不写充电寄存器。
+
+每轮由独立 transient systemd unit 执行，临时阻止桌面 idle/lid/sleep，避免依赖 SSH 是否持续连接。测试期间采用 `pm_async=0` 串行设备回调，启用 PM 调试消息和耗时记录；只在所选 `pm_test` 读回正确时写入 `state=freeze`。返回后先恢复 `pm_test=none`、`pm_async=1` 和两个日志开关为 0，再独立复核电源，启动原服务的新进程并确认本次 invocation 的满电等待。用户态超时不能保证救回卡死的内核或驱动，原默认启动和回退仍保留。
+
+| 阶段 | 实测结果 | 充电与显示恢复 |
+| --- | --- | --- |
+| freezer | 5.140863 秒返回；内核测试等待标记出现一次；成功计数 0 → 1，失败 0 | PID 5154 正常退出并释放 GPIO101，PID 5285 重新进入满电等待 |
+| devices | 7.515665 秒返回；常规设备挂起约 281.200 ms、恢复约 2081.904 ms，中间为 5 秒测试等待；成功计数 1 → 2，失败 0 | PID 5285 正常退出，PID 5565 已恢复满电等待；用户确认画面和键盘/触控板操作正常 |
+
+两轮 boottime-minus-monotonic 增量均在微秒级误差范围，没有进入真正的 s2idle 等待循环。虽然内核打印 `PM: suspend entry (s2idle)` 且 success 增加，**这两次不能计为两次真正待机或物理唤醒通过**。devices 日志中 360 次带返回值的设备回调均为 0，包括显卡、EC 键盘、USB、Wi-Fi 和蓝牙相关路径；测试后的 SSH 可达。没有重做蓝牙扫描、摄像头采集和 Wi-Fi 联网验收。
+
+诊断脚本在开发验证中修正了三项判定，原始失败记录均保留：
+
+1. 板级电池驱动优先按电流方向返回文字状态。实测 −6 mA 时状态为 Discharging，但 SBS 仍为 `0x40e0`、100%、BQ 目标为 0。改为同时检查满电标志、允许的小电流范围和状态文字；未放宽电压、温度、目标电流限制。此前两次尝试均在停服务前拒绝，未执行 PM 测试。
+2. 本机 pinmux 释放标记是 `UNCLAIMED`。初版误匹配 `GPIO UNCLAIMED`，在正常停止 PID 384 后拒绝继续；字符设备确认 used=false、consumer=None，服务日志也记录正常释放，随后独立核对电源并恢复 PID 5154。该次没有写 PM 设置或执行冻结。
+3. devices 返回后，PID 5565 的 `full-wait` 事件实际产生于启动时钟 1592.609 秒，但 journal 在 1594.870935 秒才接收，滞后约 2.262 秒。初版的一秒检查在 1593.581 秒误报 `fresh full-wait not confirmed`。原 `devices/result.json` 仍保留 `stage_passed=true`、`passed=false`；后续采集按同一 PID 和 invocation `4168ed72e5ea4d53a134ea2b139d9b0e` 独立确认恢复。最终工具改为最多等待 10 秒的日志确认，并拒绝期间的 PID/invocation 变化，不会因此重启或重试充电。
+
+`src/test-pm-stage-guards.py` 的 10 组检查已在宿主及 ARM64 真机通过，覆盖非零目标拒绝、满电小幅放电、异常电源/温度/状态拒绝、GPIO 双重检查、禁止选择更深或实际睡眠模式，以及日志延迟、过期 invocation 和超时。最终日志确认函数还针对当前 PID 5565 实际只读运行通过。最后的改动仅为诊断工具等待日志，未因此重复 PM 硬件测试。
+
+最终独立读数仍为 100%、5282 mAh、实际 0 mA、PD 5 V / 3 A、BQ 0 mA / 8400 mV；同一充电进程零重启。五个持久屏蔽和 GPIO46 策略未变，临时 inhibitor 已解除，PM 参数恢复为原值。仅清除了本轮诊断 unit 的失败标志，错误日志及结果没有删除。源码和全部证据位于 `output/sleep-debug-20261111/pm-stage/`，其中 `device-evidence-before-final-helper.tar.gz` 保留执行时工具和所有试验原始文件，`final/` 为最终诊断工具。
+
+此结果只说明**满电、先停充、串行设备回调**条件下的这两层未复现问题。下一层应分离 late/noirq 与实际 s2idle：本机内核源码明确允许 s2idle 使用 `pm_test=platform`，且在 late/noirq 回调之后、进入 `s2idle_loop()` 之前返回；目前工具仍拒绝此模式，尚未准备或执行。默认并行回调、真正唤醒 IRQ、未满电充电时的睡眠交接也仍待验证。原唤醒失败尚不能归因，更不能宣称已修复。
