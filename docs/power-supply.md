@@ -152,8 +152,8 @@ The physical unplug/replug test subsequently passed, and the status service is
 **enabled at boot**. On November 11, no new boot was exercised. The November 12
 boot inspection below subsequently exposed an autostart failure, so the November 11
 runtime acceptance must not be treated as successful boot acceptance. No real sleep,
-different adapter, positive-current charging phase, or other desktop environment
-was tested as part of this feature.
+different adapter, or other desktop environment was tested as part of this feature.
+Positive-current reporting was subsequently verified on November 12, as recorded below.
 
 ### Physical unplug/replug acceptance, 2026-11-11
 
@@ -180,8 +180,9 @@ link and read back `enabled`; it remains ordered after `np545-gpiocharge.service
 The current kernel command line already requests the controller through
 `systemd.wants=np545-gpiocharge.service`. The charging controller stayed PID 5565,
 the reporter PID 13831, and both had zero restarts throughout this physical test.
-The five previously masked sleep targets remain masked. **Autostart has been
-configured and inspected, but a subsequent physical boot has not been exercised.**
+The five previously masked sleep targets remained masked. At the end of this
+November 11 test, autostart had been configured but not exercised across a boot;
+the November 12 inspection below records the subsequent boot failure and correction.
 
 ### Wired access interruption during acceptance
 
@@ -235,13 +236,51 @@ The candidate passed ARM64 compilation and `systemd-analyze verify`; its module 
 byte-identical to the physically/QEMU-validated module. The final package's unit
 was extracted and inspected. Package SHA-256:
 `5748c9beabc2e7e451a39f1fafd3f1d51e463f7b31e50a58bc3848924b09da7e`.
-**It has not yet been installed or accepted on the physical machine.** Evidence
-and the candidate are in `output/sleep-static-ip-20261112/`.
+It was subsequently installed and verified during the running physical boot below;
+**the corrected unit still requires validation across a new boot**. Evidence and
+the package are in `output/sleep-static-ip-20261112/`.
 
 The same inspection confirmed that all five sleep targets remain persistently
 masked, and logind explicitly refused `suspend.target`. The kernel still advertises
 `s2idle`; this is a policy block before sleep, not a new demonstration of failed
-resume. No sleep targets were unmasked. A requested wired static-IP change was
-prepared, but the SSH connection closed before a success acknowledgement as the
-machine ran out of battery; the remote file/timer state must be checked on recovery
-before retrying. Do not report that network change as completed.
+resume. No sleep targets were unmasked.
+
+### November 12 recovery boot and version 3 runtime verification
+
+After the user observed sustained approximately 35 W charging while powered off,
+they started Latest Linux and reported Wi-Fi `10.86.112.128` and approximately
+12 V / 1.5 A (18 W) adapter input. Boot `e812fccd-e16f-4310-b23d-0a913e36e3b8`
+uses the same Latest kernel. Its original charging controller started successfully,
+without a manual restart: PID 385, invocation `c85c326a6fd24102a314e7862f37d4b7`,
+zero restarts. It read the firmware's 3,776 mA target and then set the existing
+conservative 1,024 mA target. The live PD contract was 12 V / 3 A. Battery samples
+reported approximately +1,070 to +1,072 mA, with capacity rising from 776 to 959 mAh
+(15% to 18%) over the inspection and installation. This demonstrates actual
+charging on this boot; it does **not** explain or resolve the preceding boot's
+controller failure. Adapter input power is distinct from measured battery power.
+
+The boot journal reproduced the old status-unit race: the version 2 unit was
+skipped at BOOTTIME 16.762 seconds, before the battery appeared at 17.494 seconds.
+Version 3 was installed and only the reporting service was started. It is enabled,
+active (PID 1745, zero restarts), and reports:
+
+* `online=1`, PD `voltage_max=12000000`, `current_max=3000000`;
+* `input_current_limit=3000000`, `constant_charge_current=1024000`,
+  `constant_charge_voltage=8760000`;
+* UPower line power online and `OnBattery=false`.
+
+The charging controller retained the same PID and invocation throughout. See
+`fresh-boot-112128.log`, `install-reporter-v3.log`, and `post-config-live.log`.
+The change fixes the observed startup condition in the unit; its next-boot
+acceptance remains pending. No reboot, sleep test, or charging-limit change was
+performed during this deployment.
+
+The earlier interrupted static-IP attempt left no configuration or backup on the
+machine. The user-requested wired configuration was then applied and read back:
+`10.86.97.82/22`, gateway `10.86.96.1`, bound to MAC `00:e0:4f:71:1a:c1` in
+`/etc/systemd/network/10-np545xla-wired-static.network`. The original DHCP file was
+preserved, a device-local rollback script saved, and the timed rollback disarmed
+after a fresh Wi-Fi connection verified the new file. At this point the wired
+interface still reported **no carrier**: persistence and configuration selection
+are verified, but actual wired connectivity awaits a physical link. No router
+DHCP reservation was made, and this site-specific address is not part of the package.
