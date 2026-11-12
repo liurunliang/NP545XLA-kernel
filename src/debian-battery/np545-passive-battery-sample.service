@@ -4,10 +4,13 @@ ConditionKernelCommandLine=np545.chargepassive=1
 ConditionKernelCommandLine=np545.battery=1
 
 [Service]
-ExecStart=/usr/bin/np545xla-battery-sample --watch
+# Open the log after systemd has created LogsDirectory. StandardOutput=append:
+# is opened earlier and fails when the directory does not yet exist.
+ExecStart=/bin/sh -c 'exec /usr/bin/np545xla-battery-sample --watch >>/var/log/np545-passive-charge/battery.jsonl'
 LogsDirectory=np545-passive-charge
 LogsDirectoryMode=0700
-StandardOutput=append:/var/log/np545-passive-charge/battery.jsonl
+UMask=0077
+StandardOutput=journal
 StandardError=journal
 Restart=on-failure
 RestartSec=5
