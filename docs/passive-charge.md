@@ -58,7 +58,23 @@
 没有额外注释；适配 GRUB 的警告注释后重测通过，交付启动器未因此修改。
 
 构建、原 EFI、systemd 生成器输出与 QEMU 记录位于
-`output/passive-charge-20261112/`。真机安装、启动和充电实验结果待补充。
+`output/passive-charge-20261112/`。实现提交为 `9686bc6`。
+
+### 真机安装及首次重启请求
+
+真机 `--check` 和 `--install` 均已通过，发布后的 EFI SHA-256 为
+`a9133f5d3b1646f5a2dba6fd5a611154f1184bc46abd0985173f3d2518d4e12c`。
+只读重新挂载确认新启动器、原始备份和新服务文件一致；安装前后原控制
+进程 PID 385、状态进程 PID 1745 及各自 invocation 均未改变，零重启。
+新只读采样服务在普通 Latest 下保持 inactive。安装后电池 32%、实际
++1,072 mA，确认安装本身没有中断充电。
+
+候选包及回退安装器位于真机 `/var/tmp/np545-passive-charge-20261112/`。
+随后 `--arm` 成功并经重新挂载确认标记为 1，已通过独立 systemd 定时任务
+发出一次重启。重启后原 Wi-Fi `10.86.112.128:2223` 尚未恢复可登录，已请
+用户确认界面及新地址。**目前尚不能确认真机进入测试项、标记已消费或持续
+充电通过**；以之后读回的新 boot ID、cmdline、服务状态和落盘日志为准。
+原始记录为 `device-preflight.log`、`device-install.log`、`arm-and-reboot.log`。
 
 ## 真机实验顺序
 
