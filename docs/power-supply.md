@@ -284,3 +284,47 @@ after a fresh Wi-Fi connection verified the new file. At this point the wired
 interface still reported **no carrier**: persistence and configuration selection
 are verified, but actual wired connectivity awaits a physical link. No router
 DHCP reservation was made, and this site-specific address is not part of the package.
+
+### November 12 wired static-address acceptance and dual-interface limitation
+
+After the user checked and reseated the Ethernet cable, the interface became
+`routable (configured)`, 1 Gbps/full duplex, with `10.86.97.82/22` and the intended
+gateway. Raw ICMP probes bound to Ethernet reached both `10.86.96.1` and the Mac
+`10.86.112.123` with 3/3 replies. No new r8152 USB errors were recorded during this
+check. The first unprivileged ping attempt was unsupported by this kernel; it was
+not packet-loss evidence.
+
+SSH from the Mac to the wired address still timed out with both Samsung interfaces
+connected. A 25-second observation restricted to this connection's TCP headers
+showed the SYN arriving on Ethernet and repeated SYN-ACKs leaving on Wi-Fi with
+source `10.86.97.82`, without a completing ACK. `ip route get` likewise selected
+Wi-Fi for replies to the Mac's directly connected wireless subnet. This identifies
+the asymmetric reply path; it does not establish which downstream component drops
+those replies, or explain every historical Ethernet interruption.
+
+The running kernel's `/proc/config.gz` has `CONFIG_IP_ADVANCED_ROUTER` disabled,
+and privileged `ip -4 rule show` returns `Operation not supported`. Therefore no
+source-routing configuration was installed. A future kernel needs
+`CONFIG_IP_ADVANCED_ROUTER=y` and `CONFIG_IP_MULTIPLE_TABLES=y`, followed by
+per-source routes, to support this proposed dual-interface solution. These are
+standard kernel facilities, not new NP545XLA hardware drivers; see the
+[upstream IPv4 Kconfig](https://github.com/torvalds/linux/blob/master/net/ipv4/Kconfig).
+
+To verify the static address independently, a temporary systemd job restored the
+original Wi-Fi connection after 35 seconds, armed before a separate job disconnected
+Wi-Fi. During the isolated interval, SSH to **10.86.97.82:2223 succeeded**, verified
+the pinned host key and unchanged boot ID, and selected Ethernet for replies to the
+Mac. The charging/status services retained PIDs 385/1745 and zero restarts; the
+battery had reached 23% with +1,072 mA measured current. This accepts the wired
+static configuration and isolated SSH path, not simultaneous SSH access through
+both interfaces. See `wired-after-cable.log`, `wired-gateway-probe.log`,
+`wired-ssh-packet-headers.log`, `wired-routing-support.log`, and
+`wired-isolated-ssh-success.log` in the November 12 evidence directory.
+
+The scheduled Wi-Fi restoration completed successfully, and a fresh SSH session
+through `10.86.112.128` confirmed both addresses and the unchanged static file hash.
+The first optional nmcli autoconnect-field query used an unsupported field name;
+it does not negate the confirmed restoration, but no autoconnect-field result is
+claimed. See `wifi-restored-after-wired-test.log`. The user then explicitly stopped
+further wired investigation. Retain the static configuration and use Wi-Fi for
+subsequent access; no policy-routing or kernel change was applied.
