@@ -1,0 +1,17 @@
+[Unit]
+Description=Persist read-only battery samples for the passive charging boot
+ConditionKernelCommandLine=np545.chargepassive=1
+ConditionKernelCommandLine=np545.battery=1
+
+[Service]
+ExecStart=/usr/bin/np545xla-battery-sample --watch
+LogsDirectory=np545-passive-charge
+LogsDirectoryMode=0700
+StandardOutput=append:/var/log/np545-passive-charge/battery.jsonl
+StandardError=journal
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
