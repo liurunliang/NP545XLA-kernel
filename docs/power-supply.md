@@ -76,7 +76,7 @@ gcc -static -Wall -Wextra -Werror -O2 src/debian-battery/power_supply_abi_test.c
 ```
 
 The build runs `W=1`, checks that no I2C/GPIO/regmap/Type-C control symbols are
-imported, and creates only `np545xla-power-supply_7.0.0-2_arm64.deb`. It never rebuilds
+imported, and creates only `np545xla-power-supply_7.0.0-3_arm64.deb`. It never rebuilds
 or installs the charging/sleep candidate packages. Installation does not start or
 enable the reporter automatically.
 
@@ -93,7 +93,7 @@ normal Samsung loading never uses that parameter.
 After module/QEMU validation, on the matching Samsung kernel:
 
 ```sh
-sudo dpkg -i np545xla-power-supply_7.0.0-2_arm64.deb
+sudo dpkg -i np545xla-power-supply_7.0.0-3_arm64.deb
 sudo systemctl start np545-power-supply.service
 cat /sys/class/power_supply/np545-usb-c/uevent
 upower -e
@@ -149,8 +149,11 @@ module is byte-identical to the QEMU/physical-tested module. Version 2 was insta
 and the reporter alone restarted: PID 13831, zero restarts, online state restored,
 original charging controller unchanged. See `update-v2.log`.
 The physical unplug/replug test subsequently passed, and the status service is
-now **enabled at boot**. No real sleep, new boot, different adapter, positive-current
-charging phase, or other desktop environment was tested as part of this feature.
+**enabled at boot**. On November 11, no new boot was exercised. The November 12
+boot inspection below subsequently exposed an autostart failure, so the November 11
+runtime acceptance must not be treated as successful boot acceptance. No real sleep,
+different adapter, positive-current charging phase, or other desktop environment
+was tested as part of this feature.
 
 ### Physical unplug/replug acceptance, 2026-11-11
 
@@ -200,3 +203,45 @@ Artifacts and raw evidence: `output/power-supply-20261111/` in the isolated
 sessions; no merge or push is implied by these tests.
 An archival copy is also kept in the main repository's ignored
 `output/power-supply-status-20261111/` directory, including source and evidence.
+
+### November 12 boot inspection and startup-condition correction
+
+On 2026-11-12, boot `bc4ec607-8973-4d5e-8f2f-d5952372ed4a` was running the original
+Latest kernel Image `163b71d2...64735b`, with `np545.battery=1` and the controller's
+startup flags present. Two distinct failures were observed:
+
+* `np545-power-supply.service` was enabled but skipped during boot because
+  `ConditionPathExists=/sys/class/power_supply/np545-battery` was false at that
+  moment. The battery node and module existed by the time of inspection. A systemd
+  condition is not a wait for the device, so this left the service inactive.
+* `np545-gpiocharge.service` exited with status 1 after about 1.114 seconds. Its
+  early boot journal entries were no longer retained. The cause of this controller
+  failure has **not** been established, and a reporting-only fix cannot repair it.
+
+The user then reported automatic shutdown from an empty battery, and clarified the
+meter comparison: approximately 12 V / 0.6 A (7.2 W) while Linux was running versus
+approximately 35 W when completely powered off. These are user-reported adapter
+input readings, not independently measured battery currents. This supports giving
+the controller's failed startup priority, but does not identify the failing line
+of code or prove that the reporting bridge caused it.
+
+Candidate package **7.0.0-3** replaces the one-time battery-node condition with
+`ConditionKernelCommandLine=np545.battery=1`. The reporter's existing runtime checks
+already withhold an input supply until an active, recognized controller supplies
+fresh evidence. It can therefore start before the battery is ready without
+inventing an online state. This change does not restart or modify charging control.
+
+The candidate passed ARM64 compilation and `systemd-analyze verify`; its module is
+byte-identical to the physically/QEMU-validated module. The final package's unit
+was extracted and inspected. Package SHA-256:
+`5748c9beabc2e7e451a39f1fafd3f1d51e463f7b31e50a58bc3848924b09da7e`.
+**It has not yet been installed or accepted on the physical machine.** Evidence
+and the candidate are in `output/sleep-static-ip-20261112/`.
+
+The same inspection confirmed that all five sleep targets remain persistently
+masked, and logind explicitly refused `suspend.target`. The kernel still advertises
+`s2idle`; this is a policy block before sleep, not a new demonstration of failed
+resume. No sleep targets were unmasked. A requested wired static-IP change was
+prepared, but the SSH connection closed before a success acknowledgement as the
+machine ran out of battery; the remote file/timer state must be checked on recovery
+before retrying. Do not report that network change as completed.

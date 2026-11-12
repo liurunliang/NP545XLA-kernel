@@ -1,7 +1,9 @@
 [Unit]
 Description=NP545XLA read-only external power status bridge
 After=np545-gpiocharge.service
-ConditionPathExists=/sys/class/power_supply/np545-battery
+# The battery device can appear after the initial boot transaction. The reporter
+# already waits fail-closed for an active controller and fresh input-path proof.
+ConditionKernelCommandLine=np545.battery=1
 
 [Service]
 Type=simple
